@@ -64,11 +64,14 @@
         const API_KEY = 'AIzaSyBxvFtk2jiBisjoubvv2olJEgyoyNQ_k0w';
         const DISCOVERY_DOC = 'https://sheets.googleapis.com/$discovery/rest?version=v4';
         const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
-        const APP_PASSWORD = "1234"; // 설정된 간편 비밀번호
+        
+        // 🔐 간편비밀번호 설정 (0224로 변경됨)
+        const APP_PASSWORD = "0224"; 
 
         const App = () => {
             const [isUnlocked, setIsUnlocked] = useState(false);
             const [passInput, setPassInput] = useState("");
+            const [gapiInited, setGapiInited] = useState(false);
             
             const [toons, setToons] = useState(() => {
                 const saved = localStorage.getItem('toonkit_data_v4');
@@ -90,9 +93,17 @@
                 setTimeout(() => setToast(''), 3000);
             };
 
-            // 1. Load Data Function (Shared)
+            // 1. Load Data Function
             const loadData = async (targetId = spreadsheetId) => {
-                if (!targetId || !gapi.client.getToken()) return;
+                if (!gapiInited || !targetId) return;
+                
+                const token = gapi.client.getToken();
+                if (!token) {
+                    setIsLoggedIn(false);
+                    showToast("로그인이 필요합니다");
+                    return;
+                }
+
                 setIsSyncing(true);
                 try {
                     const response = await gapi.client.sheets.spreadsheets.values.get({
@@ -110,46 +121,82 @@
                         }));
                         setToons(fetched.sort((a, b) => b.updatedAt - a.updatedAt));
                         showToast("데이터 동기화 완료");
+                    } else {
+                        showToast("시트에 데이터가 없습니다");
                     }
                 } catch (e) {
-                    console.error(e);
-                    showToast("로드 중 오류 발생");
+                    console.error("Load Error:", e);
+                    if (e.status === 401) {
+                        setIsLoggedIn(false);
+                        localStorage.removeItem('google_auth_token');
+                        showToast("인증이 만료되었습니다.");
+                    } else {
+                        showToast("시트 로드 실패. ID를 확인하세요.");
+                    }
                 } finally {
                     setIsSyncing(false);
                 }
             };
 
-            // Initialize GAPI & Token Client
+            // GAPI Init
             useEffect(() => {
-                const start = async () => {
-                    await new Promise(resolve => gapi.load('client', resolve));
-                    await gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
-                    const token = localStorage.getItem('google_auth_token');
-                    if (token) {
-                        gapi.client.setToken(JSON.parse(token));
-                        setIsLoggedIn(true);
+                const initGapi = async () => {
+                    try {
+                        await new Promise((resolve) => {
+                            const interval = setInterval(() => {
+                                if (typeof gapi !== 'undefined') {
+                                    clearInterval(interval);
+                                    resolve();
+                                }
+                            }, 100);
+                        });
+
+                        await new Promise(resolve => gapi.load('client', resolve));
+                        await gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
+                        
+                        setGapiInited(true);
+
+                        const savedToken = localStorage.getItem('google_auth_token');
+                        if (savedToken) {
+                            const parsedToken = JSON.parse(savedToken);
+                            gapi.client.setToken(parsedToken);
+                            setIsLoggedIn(true);
+                        }
+                    } catch (e) {
+                        console.error("GAPI Init Error:", e);
                     }
                 };
-                start();
 
-                tokenClient.current = google.accounts.oauth2.initTokenClient({
-                    client_id: CLIENT_ID,
-                    scope: SCOPES,
-                    callback: async (resp) => {
-                        if (resp.error) return;
-                        localStorage.setItem('google_auth_token', JSON.stringify(resp));
-                        setIsLoggedIn(true);
-                        showToast("로그인 성공");
-                        // 로그인 성공 시 즉시 데이터 로드
-                        await loadData();
-                    },
-                });
+                const initGsi = () => {
+                    tokenClient.current = google.accounts.oauth2.initTokenClient({
+                        client_id: CLIENT_ID,
+                        scope: SCOPES,
+                        callback: async (resp) => {
+                            if (resp.error) return;
+                            localStorage.setItem('google_auth_token', JSON.stringify(resp));
+                            setIsLoggedIn(true);
+                            showToast("로그인 성공");
+                            await loadData();
+                        },
+                    });
+                };
+
+                initGapi();
+                
+                const checkGsi = setInterval(() => {
+                    if (typeof google !== 'undefined' && google.accounts) {
+                        clearInterval(checkGsi);
+                        initGsi();
+                    }
+                }, 100);
+
+                return () => clearInterval(checkGsi);
             }, []);
 
             useEffect(() => {
                 localStorage.setItem('toonkit_data_v4', JSON.stringify(toons));
                 if (window.lucide) window.lucide.createIcons();
-            }, [toons, isEditing, showSettings, isUnlocked]);
+            }, [toons, isEditing, showSettings, isUnlocked, gapiInited]);
 
             // Password Handler
             const handlePassInput = (num) => {
@@ -158,10 +205,11 @@
                 setPassInput(nextPass);
                 
                 if (nextPass === APP_PASSWORD) {
-                    setTimeout(() => {
+                    setTimeout(async () => {
                         setIsUnlocked(true);
-                        // 비밀번호 해제와 동시에 자동 데이터 로드 시도
-                        if (isLoggedIn) loadData();
+                        if (gapiInited && isLoggedIn) {
+                            await loadData();
+                        }
                     }, 200);
                 } else if (nextPass.length === 4) {
                     setTimeout(() => {
@@ -172,10 +220,9 @@
             };
 
             const syncAllToSheets = async (currentList) => {
-                if (!spreadsheetId || !isLoggedIn) return;
+                if (!spreadsheetId || !isLoggedIn || !gapiInited) return;
                 setIsSyncing(true);
                 try {
-                    await gapi.client.sheets.spreadsheets.get({ spreadsheetId });
                     await gapi.client.sheets.spreadsheets.values.clear({
                         spreadsheetId,
                         range: 'A2:N100'
@@ -193,8 +240,8 @@
                         });
                     }
                 } catch (e) {
-                    console.error(e);
-                    showToast("시트 동기화 실패");
+                    console.error("Sync Error:", e);
+                    showToast("저장 중 오류 발생");
                 } finally {
                     setIsSyncing(false);
                 }
@@ -218,7 +265,7 @@
 
             const handleDelete = async (e, id) => {
                 e.stopPropagation();
-                if (!confirm("이 콘티를 영구 삭제하시겠습니까? 구글 시트에서도 삭제됩니다.")) return;
+                if (!confirm("이 콘티를 영구 삭제하시겠습니까?")) return;
                 const newList = toons.filter(t => t.id !== id);
                 setToons(newList);
                 await syncAllToSheets(newList);
@@ -238,12 +285,12 @@
                     <div className="h-full w-full flex flex-col items-center justify-center bg-white px-10">
                         <div className="mb-12 text-center">
                             <h1 className="text-3xl font-black text-pink-600 mb-2">ToonKit</h1>
-                            <p className="text-slate-400 font-medium">간편 비밀번호를 입력하세요</p>
+                            <p className="text-slate-400 font-medium tracking-tight">비밀번호를 입력하세요</p>
                         </div>
                         
                         <div className="flex gap-6 mb-16">
                             {[0, 1, 2, 3].map(i => (
-                                <div key={i} className={`pass-dot ${passInput.length > i ? 'bg-pink-500 scale-125' : 'bg-slate-100'}`} />
+                                <div key={i} className={`pass-dot ${passInput.length > i ? 'bg-pink-500 scale-125 shadow-lg shadow-pink-200' : 'bg-slate-100'}`} />
                             ))}
                         </div>
 
@@ -256,7 +303,7 @@
                             <div />
                             <button onClick={() => handlePassInput("0")} className="h-16 w-16 rounded-full flex items-center justify-center text-2xl font-bold text-slate-700 active:bg-pink-50 transition-colors">0</button>
                             <button onClick={() => setPassInput("")} className="h-16 w-16 rounded-full flex items-center justify-center text-slate-300 active:bg-pink-50 transition-colors">
-                                <i data-lucide="x"></i>
+                                <i data-lucide="delete"></i>
                             </button>
                         </div>
 
@@ -281,7 +328,7 @@
                             <h1 className="text-2xl font-black text-pink-600 tracking-tighter">ToonKit</h1>
                         </div>
                         <div className="flex gap-2">
-                            <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-xl ${isLoggedIn ? 'text-pink-500 bg-pink-50' : 'text-slate-300'}`}>
+                            <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-xl transition-colors ${showSettings ? 'bg-pink-100 text-pink-600' : (isLoggedIn ? 'text-pink-500 bg-pink-50' : 'text-slate-300')}`}>
                                 <i data-lucide="settings"></i>
                             </button>
                             {!isEditing && (
@@ -303,18 +350,29 @@
                             <div className="mb-6 p-6 bg-white rounded-3xl shadow-xl border border-pink-50 animate-in slide-in-from-top-2">
                                 <h3 className="font-bold text-slate-800 mb-4">설정 및 동기화</h3>
                                 <div className="space-y-3">
-                                    <button onClick={() => tokenClient.current.requestAccessToken()} className="w-full py-4 bg-slate-100 rounded-2xl font-bold flex items-center justify-center gap-2 text-slate-700">
-                                        <i data-lucide="user"></i> {isLoggedIn ? "구글 계정 연결됨" : "구글 로그인"}
+                                    <button 
+                                        onClick={() => tokenClient.current.requestAccessToken({prompt: 'consent'})} 
+                                        className={`w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-colors ${isLoggedIn ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-700'}`}
+                                    >
+                                        <i data-lucide={isLoggedIn ? "check-circle" : "user"}></i> {isLoggedIn ? "구글 계정 연결됨" : "구글 로그인"}
                                     </button>
-                                    <input 
-                                        type="text" 
-                                        value={spreadsheetId} 
-                                        onChange={(e) => {setSpreadsheetId(e.target.value); localStorage.setItem('toonkit_sheet_id', e.target.value);}} 
-                                        placeholder="구글 시트 ID 입력" 
-                                        className="w-full p-4 bg-slate-50 rounded-2xl text-sm border-2 border-transparent focus:border-pink-200 outline-none"
-                                    />
-                                    <button onClick={() => loadData()} className="w-full py-4 bg-pink-50 text-pink-600 rounded-2xl font-bold flex items-center justify-center gap-2">
-                                        <i data-lucide="download" className={isSyncing ? "animate-bounce" : ""}></i> 시트에서 불러오기
+                                    <div className="relative">
+                                        <input 
+                                            type="text" 
+                                            value={spreadsheetId} 
+                                            onChange={(e) => {setSpreadsheetId(e.target.value); localStorage.setItem('toonkit_sheet_id', e.target.value);}} 
+                                            placeholder="구글 시트 ID 입력" 
+                                            className="w-full p-4 bg-slate-50 rounded-2xl text-sm border-2 border-transparent focus:border-pink-200 outline-none pr-12"
+                                        />
+                                        <i data-lucide="key" className="absolute right-4 top-4 w-5 h-5 text-slate-300"></i>
+                                    </div>
+                                    <button 
+                                        onClick={() => loadData()} 
+                                        disabled={isSyncing}
+                                        className="w-full py-4 bg-pink-50 text-pink-600 rounded-2xl font-bold flex items-center justify-center gap-2 active:bg-pink-100 disabled:opacity-50"
+                                    >
+                                        {isSyncing ? <div className="spinner !border-pink-600 !border-t-transparent"></div> : <i data-lucide="download"></i>}
+                                        시트에서 불러오기
                                     </button>
                                 </div>
                             </div>
@@ -350,7 +408,7 @@
                                         />
                                     </div>
                                 ))}
-                                <div className="fixed bottom-10 left-6 right-6 flex gap-3">
+                                <div className="fixed bottom-10 left-6 right-6 flex gap-3 z-40">
                                     <button onClick={handleSave} className="flex-1 py-5 bg-pink-600 text-white rounded-[2rem] font-black text-lg shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-transform">
                                         {isSyncing ? <div className="spinner"></div> : <i data-lucide="save"></i>}
                                         {isSyncing ? "동기화 중..." : "저장하고 시트 업데이트"}
