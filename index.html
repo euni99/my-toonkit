@@ -48,7 +48,12 @@
             const [currentToon, setCurrentToon] = useState({ id: null, title: '', pages: Array(10).fill(''), completed: false });
             const [isSyncing, setIsSyncing] = useState(false);
             const [isLoggedIn, setIsLoggedIn] = useState(false);
-            const [rawSheetInput, setRawSheetInput] = useState(localStorage.getItem('toonkit_sheet_raw') || '');
+            
+            // 시트 주소 상태 관리 (초기값 로드)
+            const [rawSheetInput, setRawSheetInput] = useState(() => {
+                return localStorage.getItem('toonkit_sheet_raw') || '';
+            });
+            
             const [showSettings, setShowSettings] = useState(false);
             const [errorMsg, setErrorMsg] = useState('');
             
@@ -63,7 +68,8 @@
             const extractSheetId = (input) => {
                 if (!input) return '';
                 if (input.includes('/d/')) {
-                    return input.split('/d/')[1].split('/')[0];
+                    const parts = input.split('/d/');
+                    if (parts[1]) return parts[1].split('/')[0];
                 }
                 return input;
             };
@@ -171,10 +177,8 @@
                 const newToon = currentToon.id ? currentToon : { ...currentToon, id: Date.now().toString() };
                 const newList = currentToon.id ? toons.map(t => t.id === currentToon.id ? newToon : t) : [newToon, ...toons];
                 
-                // 로컬 먼저 저장 (중요: 에러나도 데이터는 살려야 함)
                 setToons(newList);
                 
-                // 동기화 시도 (실패해도 앱이 죽지 않도록 내부 try-catch 처리됨)
                 if (isLoggedIn && rawSheetInput) {
                     await syncToSheets(newList);
                 }
@@ -229,7 +233,11 @@
                                 </button>
                                 <input 
                                     type="text" value={rawSheetInput} 
-                                    onChange={(e) => {setRawSheetInput(e.target.value); localStorage.setItem('toonkit_sheet_raw', e.target.value);}}
+                                    onChange={(e) => {
+                                        const val = e.target.value;
+                                        setRawSheetInput(val); 
+                                        localStorage.setItem('toonkit_sheet_raw', val);
+                                    }}
                                     placeholder="스프레드시트 주소(URL)를 붙여넣으세요" 
                                     className="w-full p-4 bg-slate-50 rounded-2xl text-sm mb-2 outline-none border border-slate-100 focus:border-pink-200"
                                 />
