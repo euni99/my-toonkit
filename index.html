@@ -17,7 +17,7 @@
 
     <style>
         :root { --safe-top: env(safe-area-inset-top); --safe-bottom: env(safe-area-inset-bottom); }
-        body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background-color: #FFF5F7; }
+        body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background-color: #FFF5F7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         #root { height: 100%; width: 100%; }
         .spinner { width: 24px; height: 24px; border: 3px solid #fbcfe8; border-top-color: #db2777; border-radius: 50%; animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -25,7 +25,6 @@
         .pb-safe { padding-bottom: max(1.5rem, var(--safe-bottom)); }
         .scroll-container { height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch; }
         .toon-card-completed { background-color: #f1f5f9 !important; opacity: 0.7; filter: grayscale(0.5); }
-        .strikethrough { text-decoration: line-through; color: #94a3b8; }
     </style>
 </head>
 <body>
@@ -34,18 +33,18 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
 
-        // 설정 정보
         const CLIENT_ID = '1088995464661-ft9gdmqcc90in7k5cdcussocote4mi92.apps.googleusercontent.com';
         const API_KEY = 'AIzaSyBxvFtk2jiBisjoubvv2olJEgyoyNQ_k0w';
         const DISCOVERY_DOC = 'https://sheets.googleapis.com/$discovery/rest?version=v4';
         const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 
         const App = () => {
-            // 초기 데이터: 로컬 스토리지에서 먼저 불러옴 (절대 안 사라지게)
+            // 1. 로컬 저장소에서 데이터 로드 (새로고침 방어 핵심)
             const [toons, setToons] = useState(() => {
-                const saved = localStorage.getItem('toonkit_data');
+                const saved = localStorage.getItem('toonkit_local_db');
                 return saved ? JSON.parse(saved) : [];
             });
+            
             const [isEditing, setIsEditing] = useState(false);
             const [currentToon, setCurrentToon] = useState({ id: null, title: '', pages: Array(10).fill(''), completed: false });
             const [isSyncing, setIsSyncing] = useState(false);
@@ -58,9 +57,9 @@
                 if (window.lucide) window.lucide.createIcons();
             }, []);
 
-            // 로컬 스토리지 자동 저장 (toons 상태가 바뀔 때마다 실행)
+            // 데이터 상태가 변할 때마다 로컬 저장소에 즉시 기록
             useEffect(() => {
-                localStorage.setItem('toonkit_data', JSON.stringify(toons));
+                localStorage.setItem('toonkit_local_db', JSON.stringify(toons));
                 refreshIcons();
             }, [toons, refreshIcons]);
 
@@ -70,41 +69,12 @@
                     window.gapi.load('client', async () => {
                         try {
                             await window.gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
-                            if (window.gapi.client.getToken()) {
-                                setIsLoggedIn(true);
-                                if (spreadsheetId) fetchData();
-                            }
+                            if (window.gapi.client.getToken()) setIsLoggedIn(true);
                         } catch (e) { console.error(e); }
                     });
                 };
                 initGapi();
             }, []);
-
-            const fetchData = async (id = spreadsheetId) => {
-                if (!id || !isLoggedIn || !window.gapi?.client?.sheets) return;
-                setIsSyncing(true);
-                try {
-                    const spreadsheet = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId: id });
-                    const sheetName = spreadsheet.result.sheets[0].properties.title;
-                    const res = await window.gapi.client.sheets.spreadsheets.values.get({
-                        spreadsheetId: id,
-                        range: `${sheetName}!A2:M`,
-                    });
-                    
-                    if (res.result.values) {
-                        const cloudData = res.result.values.map((row, i) => ({
-                            id: row[12] || (Date.now() + i).toString(), // 마지막 열에 ID 저장 가정
-                            title: row[0] || '제목 없음',
-                            pages: row.slice(1, 11).concat(Array(10).fill('')).slice(0, 10),
-                            completed: row[11] === 'TRUE'
-                        }));
-                        // 클라우드 데이터가 있으면 로컬과 병합하거나 덮어씀
-                        setToons(cloudData);
-                    }
-                } catch (e) {
-                    setErrorMsg('불러오기 실패: 시트 권한(편집자)을 확인해주세요.');
-                } finally { setIsSyncing(false); }
-            };
 
             const handleLogin = () => {
                 if (!window.google) return;
@@ -114,7 +84,7 @@
                     callback: (res) => {
                         if (res.access_token) {
                             setIsLoggedIn(true);
-                            if (spreadsheetId) fetchData(spreadsheetId);
+                            if (spreadsheetId) syncWithSheets(toons);
                         }
                     },
                 });
@@ -124,19 +94,45 @@
             const saveToon = async () => {
                 if (!currentToon.title.trim()) return;
                 
-                const toonWithId = currentToon.id ? currentToon : { ...currentToon, id: Date.now().toString() };
+                const toonWithId = currentToon.id ? currentToon : { 
+                    ...currentToon, 
+                    id: Date.now().toString()
+                };
+                
                 const newList = currentToon.id 
                     ? toons.map(t => t.id === currentToon.id ? toonWithId : t)
                     : [toonWithId, ...toons];
                 
-                // 1. 즉시 로컬 저장 (UI 업데이트)
+                // [중요] 1단계: 로컬에 즉시 저장 (서버 실패해도 내 폰엔 남음)
                 setToons(newList);
                 setIsEditing(false);
 
-                // 2. 구글 시트 동기화 시도
+                // 2단계: 서버(구글 시트) 동기화 시도
                 if (isLoggedIn && spreadsheetId) {
                     syncWithSheets(newList);
                 }
+            };
+
+            const syncWithSheets = async (dataList) => {
+                if (!spreadsheetId || !isLoggedIn) return;
+                setIsSyncing(true);
+                setErrorMsg('');
+                try {
+                    const spreadsheet = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+                    const sheetName = spreadsheet.result.sheets[0].properties.title;
+                    const values = dataList.map(t => [t.title, ...t.pages, t.completed ? 'TRUE' : 'FALSE', t.id]);
+                    
+                    await window.gapi.client.sheets.spreadsheets.values.update({
+                        spreadsheetId,
+                        range: `${sheetName}!A1`,
+                        valueInputOption: 'RAW',
+                        resource: { 
+                            values: [['제목', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10', '완료여부', 'ID'], ...values] 
+                        }
+                    });
+                } catch (e) {
+                    setErrorMsg('시트 저장 실패: 권한 또는 로그인을 확인하세요.');
+                } finally { setIsSyncing(false); }
             };
 
             const toggleComplete = (id, e) => {
@@ -146,76 +142,71 @@
                 if (isLoggedIn && spreadsheetId) syncWithSheets(newList);
             };
 
-            const syncWithSheets = async (dataList) => {
-                if (!spreadsheetId || !isLoggedIn) return;
-                setIsSyncing(true);
-                try {
-                    const spreadsheet = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId: spreadsheetId });
-                    const sheetName = spreadsheet.result.sheets[0].properties.title;
-                    const values = dataList.map(t => [t.title, ...t.pages, t.completed ? 'TRUE' : 'FALSE', t.id]);
-                    
-                    await window.gapi.client.sheets.spreadsheets.values.update({
-                        spreadsheetId: spreadsheetId,
-                        range: `${sheetName}!A1`,
-                        valueInputOption: 'RAW',
-                        resource: { 
-                            values: [['제목', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9', 'P10', '완료여부', 'ID'], ...values] 
-                        }
-                    });
-                } catch (e) {
-                    setErrorMsg('시트 저장 실패! (하지만 기기에는 저장되었습니다)');
-                } finally { setIsSyncing(false); }
+            const deleteToon = (id, e) => {
+                e.stopPropagation();
+                if (window.confirm("삭제할까요?")) {
+                    const newList = toons.filter(t => t.id !== id);
+                    setToons(newList);
+                    if (isLoggedIn && spreadsheetId) syncWithSheets(newList);
+                }
             };
 
             return (
-                <div className="h-full w-full flex flex-col">
-                    <header className="flex-none px-6 pt-safe pb-4 flex justify-between items-center bg-white border-b border-pink-50 shadow-sm z-10">
+                <div className="h-full w-full flex flex-col overflow-hidden">
+                    <header className="flex-none px-6 pt-safe pb-4 flex justify-between items-center bg-white border-b border-pink-50 shadow-sm z-20">
                         <div className="flex items-center gap-3">
                             {isEditing ? (
-                                <button onClick={() => setIsEditing(false)} className="text-pink-400"><i data-lucide="chevron-left" style={{width: 32, height: 32}}></i></button>
+                                <button onClick={() => setIsEditing(false)} className="text-pink-400 p-1"><i data-lucide="chevron-left" style={{width: 32, height: 32}}></i></button>
                             ) : (
-                                <div className="w-10 h-10 bg-pink-500 rounded-2xl flex items-center justify-center text-white"><i data-lucide="sparkles"></i></div>
+                                <div className="w-10 h-10 bg-pink-500 rounded-2xl flex items-center justify-center text-white shadow-lg"><i data-lucide="sparkles"></i></div>
                             )}
-                            <h1 className="text-2xl font-black text-pink-600">ToonKit</h1>
+                            <h1 className="text-2xl font-black text-pink-600 tracking-tight">ToonKit</h1>
                         </div>
                         <div className="flex items-center gap-2">
-                            <button onClick={() => setShowSettings(!showSettings)} className={`p-2 ${spreadsheetId && isLoggedIn ? 'text-pink-500' : 'text-pink-200'}`}><i data-lucide="cloud"></i></button>
-                            {!isEditing && <button onClick={() => { setCurrentToon({id:null, title:'', pages:Array(10).fill(''), completed:false}); setIsEditing(true); }} className="px-4 py-2 bg-pink-500 text-white rounded-xl font-bold text-sm">새 콘티</button>}
+                            <button onClick={() => setShowSettings(!showSettings)} className={`p-2 transition-colors ${spreadsheetId && isLoggedIn ? 'text-pink-500' : 'text-pink-200'}`}><i data-lucide="cloud"></i></button>
+                            {!isEditing && (
+                                <button onClick={() => { setCurrentToon({id:null, title:'', pages:Array(10).fill(''), completed:false}); setIsEditing(true); }} className="px-4 py-2 bg-pink-500 text-white rounded-xl font-bold text-sm active:scale-95 transition-all">새 콘티</button>
+                            )}
                         </div>
                     </header>
 
                     <main className="flex-1 scroll-container px-6 py-6 pb-40 max-w-2xl mx-auto w-full">
                         {showSettings && (
-                            <div className="mb-8 p-6 bg-white rounded-3xl border-2 border-pink-100 shadow-sm">
-                                <h2 className="font-black text-pink-500 mb-4 text-xs tracking-widest uppercase text-center">Cloud Settings</h2>
+                            <div className="mb-8 p-6 bg-white rounded-3xl border-2 border-pink-100 shadow-sm animate-in slide-in-from-top duration-300">
+                                <h2 className="font-black text-pink-500 mb-4 text-xs tracking-widest uppercase text-center">Sync Control</h2>
                                 <input 
                                     type="text" value={spreadsheetId} 
-                                    onChange={(e) => { setSpreadsheetId(e.target.value.trim()); localStorage.setItem('toonkit_sheet_id', e.target.value.trim()); }}
-                                    placeholder="구글 시트 ID 입력" 
-                                    className="w-full p-4 bg-pink-50 rounded-2xl text-sm mb-4 outline-none border border-transparent focus:border-pink-300"
+                                    onChange={(e) => { 
+                                        setSpreadsheetId(e.target.value.trim()); 
+                                        localStorage.setItem('toonkit_sheet_id', e.target.value.trim()); 
+                                    }}
+                                    placeholder="시트 ID 입력" 
+                                    className="w-full p-4 bg-pink-50 rounded-2xl text-sm mb-4 outline-none border-2 border-transparent focus:border-pink-200 transition-all"
                                 />
-                                <button onClick={handleLogin} className={`w-full py-4 rounded-2xl font-black text-sm mb-2 border-2 ${isLoggedIn ? 'bg-green-50 text-green-600 border-green-100' : 'bg-white border-pink-500 text-pink-500'}`}>
+                                <button onClick={handleLogin} className={`w-full py-4 rounded-2xl font-black text-sm border-2 transition-all ${isLoggedIn ? 'bg-green-50 text-green-600 border-green-100' : 'bg-white border-pink-500 text-pink-500'}`}>
                                     {isLoggedIn ? "구글 연동 완료" : "구글 로그인 연동"}
                                 </button>
-                                {errorMsg && <p className="mt-2 text-[11px] text-red-500 font-bold text-center">⚠️ {errorMsg}</p>}
-                                <p className="mt-4 text-[10px] text-slate-400 text-center leading-tight">시트 공유 설정에서 '링크가 있는 모든 사용자'를<br/>'편집자'로 설정해야 저장이 가능합니다.</p>
+                                {errorMsg && <p className="mt-3 text-[11px] text-red-500 font-bold text-center">⚠️ {errorMsg}</p>}
+                                <div className="mt-4 p-4 bg-slate-50 rounded-2xl text-[10px] text-slate-400 font-medium">
+                                    팁: 시트 공유를 [편집자]로 열어야 저장이 가능합니다.
+                                </div>
                             </div>
                         )}
 
                         {isEditing ? (
                             <div className="space-y-6">
-                                <input type="text" value={currentToon.title} onChange={(e) => setCurrentToon({...currentToon, title: e.target.value})} placeholder="에피소드 제목" className="w-full p-6 rounded-3xl border-2 border-pink-50 bg-white text-xl font-black focus:border-pink-300 outline-none shadow-sm" />
+                                <input type="text" value={currentToon.title} onChange={(e) => setCurrentToon({...currentToon, title: e.target.value})} placeholder="에피소드 제목" className="w-full p-6 rounded-3xl border-2 border-pink-50 bg-white text-xl font-black focus:border-pink-300 outline-none shadow-sm transition-all" />
                                 <div className="space-y-4">
                                     {currentToon.pages.map((page, idx) => (
                                         <div key={idx} className="p-6 bg-white rounded-3xl border-2 border-white shadow-sm">
                                             <span className="text-[10px] font-black text-pink-300 uppercase block mb-2">{idx === 0 ? 'COVER' : `PAGE ${idx + 1}`}</span>
-                                            <textarea value={page} onChange={(e) => { const p = [...currentToon.pages]; p[idx] = e.target.value; setCurrentToon({...currentToon, pages: p}); }} className="w-full bg-transparent resize-none outline-none text-lg min-h-[100px]" placeholder="대사나 연출..." />
+                                            <textarea value={page} onChange={(e) => { const p = [...currentToon.pages]; p[idx] = e.target.value; setCurrentToon({...currentToon, pages: p}); }} className="w-full bg-transparent resize-none outline-none text-lg min-h-[120px] leading-relaxed" placeholder="대사와 연출을 적어주세요..." />
                                         </div>
                                     ))}
                                 </div>
-                                <div className="fixed bottom-0 left-0 right-0 p-8 pb-safe bg-gradient-to-t from-[#FFF5F7] to-transparent z-20">
+                                <div className="fixed bottom-0 left-0 right-0 p-8 pb-safe bg-gradient-to-t from-[#FFF5F7] via-[#FFF5F7] to-transparent z-30">
                                     <button onClick={saveToon} className="w-full max-w-lg mx-auto p-6 bg-pink-600 text-white rounded-[2rem] font-black text-xl shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-3">
-                                        {isSyncing ? <div className="spinner" style={{borderTopColor:'#fff'}}></div> : "보관함에 저장"}
+                                        {isSyncing ? <div className="spinner" style={{borderTopColor:'#fff'}}></div> : "보관함 저장"}
                                     </button>
                                 </div>
                             </div>
@@ -225,18 +216,11 @@
                                     <div className="py-20 text-center opacity-20"><i data-lucide="layout" style={{width: 48, height: 48, margin: '0 auto 16px'}}></i><p className="font-bold">보관함이 비었습니다</p></div>
                                 ) : (
                                     toons.map((toon) => (
-                                        <div 
-                                            key={toon.id} 
-                                            onClick={() => { setCurrentToon(toon); setIsEditing(true); }} 
-                                            className={`relative p-6 rounded-[2.5rem] border-2 shadow-md active:scale-[0.98] transition-all cursor-pointer ${toon.completed ? 'toon-card-completed border-slate-200' : 'bg-white border-white'}`}
-                                        >
+                                        <div key={toon.id} onClick={() => { setCurrentToon(toon); setIsEditing(true); }} className={`group relative p-6 rounded-[2.5rem] border-2 shadow-md active:scale-[0.98] transition-all cursor-pointer ${toon.completed ? 'toon-card-completed border-slate-200' : 'bg-white border-white'}`}>
                                             <div className="flex justify-between items-start mb-4 pr-10">
-                                                <h3 className={`font-black text-lg break-all ${toon.completed ? 'strikethrough' : 'text-slate-800'}`}>{toon.title}</h3>
-                                                <button 
-                                                    onClick={(e) => toggleComplete(toon.id, e)}
-                                                    className={`absolute top-6 right-6 w-8 h-8 rounded-full border-2 flex items-center justify-center transition-all ${toon.completed ? 'bg-pink-500 border-pink-500 text-white' : 'bg-white border-pink-100 text-transparent'}`}
-                                                >
-                                                    <i data-lucide="check" style={{width: 18, height: 18}}></i>
+                                                <h3 className={`font-black text-lg break-all ${toon.completed ? 'line-through text-slate-400' : 'text-slate-800'}`}>{toon.title}</h3>
+                                                <button onClick={(e) => deleteToon(toon.id, e)} className="absolute top-6 right-6 p-2 text-pink-100 hover:text-red-400 transition-colors">
+                                                    <i data-lucide="trash-2" style={{width: 20, height: 20}}></i>
                                                 </button>
                                             </div>
                                             <div className="flex gap-1.5 h-2">
