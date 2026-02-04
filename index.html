@@ -34,15 +34,10 @@
         }
         .scroll-container::-webkit-scrollbar { display: none; }
         
-        /* Checkbox Larger Touch Target */
         .checkbox-trigger {
-            width: 44px;
-            height: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            z-index: 10;
+            width: 44px; height: 44px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; z-index: 10;
         }
 
         .spinner { 
@@ -51,6 +46,12 @@
             border-radius: 50%; animation: spin 0.8s linear infinite; 
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        .pass-dot {
+            width: 12px; height: 12px;
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
     </style>
 </head>
 <body>
@@ -63,8 +64,12 @@
         const API_KEY = 'AIzaSyBxvFtk2jiBisjoubvv2olJEgyoyNQ_k0w';
         const DISCOVERY_DOC = 'https://sheets.googleapis.com/$discovery/rest?version=v4';
         const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
+        const APP_PASSWORD = "1234"; // 설정된 간편 비밀번호
 
         const App = () => {
+            const [isUnlocked, setIsUnlocked] = useState(false);
+            const [passInput, setPassInput] = useState("");
+            
             const [toons, setToons] = useState(() => {
                 const saved = localStorage.getItem('toonkit_data_v4');
                 return saved ? JSON.parse(saved) : [];
@@ -80,49 +85,18 @@
 
             const tokenClient = useRef(null);
 
-            // Toast Message
             const showToast = (msg) => {
                 setToast(msg);
                 setTimeout(() => setToast(''), 3000);
             };
 
-            // Initialize GAPI
-            useEffect(() => {
-                const start = async () => {
-                    await new Promise(resolve => gapi.load('client', resolve));
-                    await gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
-                    const token = localStorage.getItem('google_auth_token');
-                    if (token) {
-                        gapi.client.setToken(JSON.parse(token));
-                        setIsLoggedIn(true);
-                    }
-                };
-                start();
-
-                tokenClient.current = google.accounts.oauth2.initTokenClient({
-                    client_id: CLIENT_ID,
-                    scope: SCOPES,
-                    callback: (resp) => {
-                        if (resp.error) return;
-                        localStorage.setItem('google_auth_token', JSON.stringify(resp));
-                        setIsLoggedIn(true);
-                        showToast("로그인 성공");
-                    },
-                });
-            }, []);
-
-            useEffect(() => {
-                localStorage.setItem('toonkit_data_v4', JSON.stringify(toons));
-                if (window.lucide) window.lucide.createIcons();
-            }, [toons, isEditing, showSettings]);
-
-            // Load from Sheets
-            const loadData = async () => {
-                if (!spreadsheetId || !isLoggedIn) return;
+            // 1. Load Data Function (Shared)
+            const loadData = async (targetId = spreadsheetId) => {
+                if (!targetId || !gapi.client.getToken()) return;
                 setIsSyncing(true);
                 try {
                     const response = await gapi.client.sheets.spreadsheets.values.get({
-                        spreadsheetId,
+                        spreadsheetId: targetId,
                         range: 'A2:N100',
                     });
                     const rows = response.result.values;
@@ -138,28 +112,75 @@
                         showToast("데이터 동기화 완료");
                     }
                 } catch (e) {
+                    console.error(e);
                     showToast("로드 중 오류 발생");
                 } finally {
                     setIsSyncing(false);
                 }
             };
 
-            // Full Sync to Sheets (Crucial for Deletion)
+            // Initialize GAPI & Token Client
+            useEffect(() => {
+                const start = async () => {
+                    await new Promise(resolve => gapi.load('client', resolve));
+                    await gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
+                    const token = localStorage.getItem('google_auth_token');
+                    if (token) {
+                        gapi.client.setToken(JSON.parse(token));
+                        setIsLoggedIn(true);
+                    }
+                };
+                start();
+
+                tokenClient.current = google.accounts.oauth2.initTokenClient({
+                    client_id: CLIENT_ID,
+                    scope: SCOPES,
+                    callback: async (resp) => {
+                        if (resp.error) return;
+                        localStorage.setItem('google_auth_token', JSON.stringify(resp));
+                        setIsLoggedIn(true);
+                        showToast("로그인 성공");
+                        // 로그인 성공 시 즉시 데이터 로드
+                        await loadData();
+                    },
+                });
+            }, []);
+
+            useEffect(() => {
+                localStorage.setItem('toonkit_data_v4', JSON.stringify(toons));
+                if (window.lucide) window.lucide.createIcons();
+            }, [toons, isEditing, showSettings, isUnlocked]);
+
+            // Password Handler
+            const handlePassInput = (num) => {
+                if (passInput.length >= 4) return;
+                const nextPass = passInput + num;
+                setPassInput(nextPass);
+                
+                if (nextPass === APP_PASSWORD) {
+                    setTimeout(() => {
+                        setIsUnlocked(true);
+                        // 비밀번호 해제와 동시에 자동 데이터 로드 시도
+                        if (isLoggedIn) loadData();
+                    }, 200);
+                } else if (nextPass.length === 4) {
+                    setTimeout(() => {
+                        setPassInput("");
+                        showToast("비밀번호가 틀렸습니다.");
+                    }, 300);
+                }
+            };
+
             const syncAllToSheets = async (currentList) => {
                 if (!spreadsheetId || !isLoggedIn) return;
                 setIsSyncing(true);
                 try {
-                    // 1. Get current sheet info
-                    const ss = await gapi.client.sheets.spreadsheets.get({ spreadsheetId });
-                    const sheetId = ss.result.sheets[0].properties.sheetId;
-
-                    // 2. Clear all previous data from A2 downwards
+                    await gapi.client.sheets.spreadsheets.get({ spreadsheetId });
                     await gapi.client.sheets.spreadsheets.values.clear({
                         spreadsheetId,
                         range: 'A2:N100'
                     });
 
-                    // 3. If there is data to write
                     if (currentList.length > 0) {
                         const values = currentList.map(t => [
                             t.title, ...t.pages, t.completed ? "TRUE" : "FALSE", t.id, t.updatedAt
@@ -198,7 +219,6 @@
             const handleDelete = async (e, id) => {
                 e.stopPropagation();
                 if (!confirm("이 콘티를 영구 삭제하시겠습니까? 구글 시트에서도 삭제됩니다.")) return;
-                
                 const newList = toons.filter(t => t.id !== id);
                 setToons(newList);
                 await syncAllToSheets(newList);
@@ -212,6 +232,42 @@
                 setToons(newList);
                 await syncAllToSheets(newList);
             };
+
+            if (!isUnlocked) {
+                return (
+                    <div className="h-full w-full flex flex-col items-center justify-center bg-white px-10">
+                        <div className="mb-12 text-center">
+                            <h1 className="text-3xl font-black text-pink-600 mb-2">ToonKit</h1>
+                            <p className="text-slate-400 font-medium">간편 비밀번호를 입력하세요</p>
+                        </div>
+                        
+                        <div className="flex gap-6 mb-16">
+                            {[0, 1, 2, 3].map(i => (
+                                <div key={i} className={`pass-dot ${passInput.length > i ? 'bg-pink-500 scale-125' : 'bg-slate-100'}`} />
+                            ))}
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-8 w-full max-w-[280px]">
+                            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+                                <button key={num} onClick={() => handlePassInput(num.toString())} className="h-16 w-16 rounded-full flex items-center justify-center text-2xl font-bold text-slate-700 active:bg-pink-50 transition-colors">
+                                    {num}
+                                </button>
+                            ))}
+                            <div />
+                            <button onClick={() => handlePassInput("0")} className="h-16 w-16 rounded-full flex items-center justify-center text-2xl font-bold text-slate-700 active:bg-pink-50 transition-colors">0</button>
+                            <button onClick={() => setPassInput("")} className="h-16 w-16 rounded-full flex items-center justify-center text-slate-300 active:bg-pink-50 transition-colors">
+                                <i data-lucide="x"></i>
+                            </button>
+                        </div>
+
+                        {toast && (
+                            <div className="fixed bottom-12 bg-slate-800 text-white px-6 py-3 rounded-2xl text-sm font-bold animate-in fade-in slide-in-from-bottom-4">
+                                {toast}
+                            </div>
+                        )}
+                    </div>
+                );
+            }
 
             return (
                 <div className="h-full w-full flex flex-col bg-[#FFF5F7]">
@@ -257,7 +313,7 @@
                                         placeholder="구글 시트 ID 입력" 
                                         className="w-full p-4 bg-slate-50 rounded-2xl text-sm border-2 border-transparent focus:border-pink-200 outline-none"
                                     />
-                                    <button onClick={loadData} className="w-full py-4 bg-pink-50 text-pink-600 rounded-2xl font-bold flex items-center justify-center gap-2">
+                                    <button onClick={() => loadData()} className="w-full py-4 bg-pink-50 text-pink-600 rounded-2xl font-bold flex items-center justify-center gap-2">
                                         <i data-lucide="download" className={isSyncing ? "animate-bounce" : ""}></i> 시트에서 불러오기
                                     </button>
                                 </div>
@@ -317,7 +373,6 @@
                                     >
                                         <div className="flex items-start justify-between mb-4 pr-8">
                                             <div className="flex items-center gap-3">
-                                                {/* Enhanced Checkbox Area */}
                                                 <div className="checkbox-trigger" onClick={(e) => toggleComplete(e, toon)}>
                                                     <div className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center transition-colors ${toon.completed ? 'bg-green-500 border-green-500' : 'border-slate-200 bg-white'}`}>
                                                         {toon.completed && <i data-lucide="check" className="text-white w-5 h-5 stroke-[4]"></i>}
@@ -327,10 +382,7 @@
                                                     {toon.title}
                                                 </h2>
                                             </div>
-                                            <button 
-                                                onClick={(e) => handleDelete(e, toon.id)}
-                                                className="absolute top-6 right-6 p-2 text-slate-300 hover:text-red-500"
-                                            >
+                                            <button onClick={(e) => handleDelete(e, toon.id)} className="absolute top-6 right-6 p-2 text-slate-300 hover:text-red-500">
                                                 <i data-lucide="trash-2" className="w-5 h-5"></i>
                                             </button>
                                         </div>
