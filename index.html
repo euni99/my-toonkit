@@ -25,6 +25,7 @@
         .pin-dot { width: 12px; height: 12px; border-radius: 50%; transition: all 0.2s; }
         .pin-dot.active { background-color: #db2777; transform: scale(1.2); }
         .pin-dot.inactive { background-color: #fce7f3; border: 1px solid #fbcfe8; }
+        .setting-card { position: relative; z-index: 50; }
     </style>
 </head>
 <body>
@@ -68,7 +69,6 @@
                         await new Promise(resolve => window.gapi.load('client', resolve));
                         await window.gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
                         
-                        // 로컬 스토리지 토큰 복구
                         const savedToken = localStorage.getItem('google_auth_token');
                         if (savedToken) {
                             const tokenObj = JSON.parse(savedToken);
@@ -92,13 +92,12 @@
 
                 if (window.gapi) initGapi();
                 if (window.google) initGis();
-                if (window.lucide) window.lucide.createIcons();
             }, []);
 
             useEffect(() => {
                 localStorage.setItem('toonkit_v3_data', JSON.stringify(toons));
                 if (window.lucide) window.lucide.createIcons();
-            }, [toons, isEditing, showSettings, isUnlocked, isSettingPin]);
+            }, [toons, isEditing, showSettings, isUnlocked, isSettingPin, pinInput]);
 
             // --- PIN 인증 로직 ---
             const handlePinPress = (num) => {
@@ -113,6 +112,7 @@
                         setIsSettingPin(false);
                         setIsUnlocked(true);
                         setPinInput('');
+                        setShowSettings(false); // 설정 완료 후 닫기
                     } else if (newPin === savedPin) {
                         setIsUnlocked(true);
                         setPinInput('');
@@ -164,16 +164,20 @@
                 syncToSheets(newList);
             };
 
-            // --- 잠금 화면 렌더링 ---
-            if (savedPin && !isUnlocked) {
+            // --- 잠금 화면 렌더링 (설정 시 또는 앱 진입 시) ---
+            if ((savedPin && !isUnlocked) || isSettingPin) {
                 return (
-                    <div className="h-full w-full flex flex-col items-center justify-center bg-[#FFF5F7] px-10">
+                    <div className="h-full w-full flex flex-col items-center justify-center bg-[#FFF5F7] px-10 fixed inset-0 z-[100]">
                         <div className="mb-10 text-center">
                             <div className="w-16 h-16 bg-pink-500 rounded-2xl flex items-center justify-center text-white mx-auto mb-4 shadow-xl shadow-pink-200">
-                                <i data-lucide="lock"></i>
+                                <i data-lucide={isSettingPin ? "shield-check" : "lock"}></i>
                             </div>
-                            <h2 className="text-xl font-black text-slate-800">ToonKit 잠금해제</h2>
-                            <p className="text-sm text-slate-400 mt-1">PIN 번호 4자리를 입력하세요</p>
+                            <h2 className="text-xl font-black text-slate-800">
+                                {isSettingPin ? "새 PIN 번호 설정" : "ToonKit 잠금해제"}
+                            </h2>
+                            <p className="text-sm text-slate-400 mt-1">
+                                {isSettingPin ? "사용할 숫자 4자리를 입력하세요" : "PIN 번호 4자리를 입력하세요"}
+                            </p>
                         </div>
                         
                         <div className="flex gap-4 mb-12">
@@ -184,12 +188,15 @@
 
                         <div className="grid grid-cols-3 gap-6 w-full max-w-[280px]">
                             {[1,2,3,4,5,6,7,8,9].map(n => (
-                                <button key={n} onClick={() => handlePinPress(n.toString())} className="h-16 w-16 rounded-full bg-white text-xl font-bold text-slate-700 shadow-sm active:bg-pink-100 transition-colors">{n}</button>
+                                <button key={n} onClick={() => handlePinPress(n.toString())} className="h-16 w-16 rounded-full bg-white text-xl font-bold text-slate-700 shadow-sm active:bg-pink-100 transition-colors flex items-center justify-center pointer-events-auto">{n}</button>
                             ))}
                             <div className="h-16 w-16"></div>
-                            <button onClick={() => handlePinPress('0')} className="h-16 w-16 rounded-full bg-white text-xl font-bold text-slate-700 shadow-sm active:bg-pink-100 transition-colors">0</button>
-                            <button onClick={() => setPinInput(pinInput.slice(0, -1))} className="h-16 w-16 rounded-full flex items-center justify-center text-slate-300 active:text-pink-500"><i data-lucide="delete"></i></button>
+                            <button onClick={() => handlePinPress('0')} className="h-16 w-16 rounded-full bg-white text-xl font-bold text-slate-700 shadow-sm active:bg-pink-100 transition-colors flex items-center justify-center pointer-events-auto">0</button>
+                            <button onClick={() => setPinInput(pinInput.slice(0, -1))} className="h-16 w-16 rounded-full flex items-center justify-center text-slate-300 active:text-pink-500 pointer-events-auto"><i data-lucide="delete"></i></button>
                         </div>
+                        {isSettingPin && (
+                            <button onClick={() => setIsSettingPin(false)} className="mt-8 text-slate-400 font-bold underline">취소하기</button>
+                        )}
                         {errorMsg && <p className="mt-6 text-red-500 font-bold animate-bounce">{errorMsg}</p>}
                     </div>
                 );
@@ -211,28 +218,41 @@
 
                     <main className="flex-1 scroll-container px-6 py-4">
                         {showSettings && (
-                            <div className="mb-6 p-6 bg-white rounded-3xl border-2 border-pink-100 shadow-xl animate-in fade-in zoom-in duration-200">
+                            <div className="mb-6 p-6 bg-white rounded-3xl border-2 border-pink-100 shadow-xl animate-in fade-in zoom-in duration-200 setting-card">
                                 <section className="mb-6">
                                     <p className="text-[10px] font-black text-pink-400 uppercase tracking-widest mb-3">계정 및 보안</p>
-                                    <button onClick={handleLogin} className={`w-full py-3 rounded-2xl font-bold text-sm mb-2 ${isLoggedIn ? 'bg-green-50 text-green-600' : 'bg-pink-50 text-pink-600'}`}>
-                                        {isLoggedIn ? "✅ 구글 연동 유지 중" : "🔗 구글 로그인 연동"}
+                                    <button 
+                                        type="button"
+                                        onClick={handleLogin} 
+                                        className={`w-full py-4 rounded-2xl font-bold text-sm mb-3 flex items-center justify-center gap-2 border-none cursor-pointer ${isLoggedIn ? 'bg-green-50 text-green-600' : 'bg-pink-50 text-pink-600'}`}
+                                    >
+                                        <i data-lucide={isLoggedIn ? "check-circle" : "log-in"} className="w-4 h-4"></i>
+                                        {isLoggedIn ? "구글 연동 완료" : "구글 로그인 연동"}
                                     </button>
-                                    <button onClick={() => {setIsSettingPin(true); setIsUnlocked(false); setPinInput('');}} className="w-full py-3 bg-slate-50 text-slate-600 rounded-2xl font-bold text-sm">
-                                        {savedPin ? "🔐 PIN 번호 변경" : "🔐 PIN 번호 설정"}
+                                    <button 
+                                        type="button"
+                                        onClick={() => {
+                                            setPinInput('');
+                                            setIsSettingPin(true);
+                                        }} 
+                                        className="w-full py-4 bg-slate-100 text-slate-700 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 border-none cursor-pointer active:bg-slate-200"
+                                    >
+                                        <i data-lucide="key" className="w-4 h-4"></i>
+                                        {savedPin ? "PIN 번호 변경" : "PIN 번호 설정"}
                                     </button>
-                                    {isLoggedIn && <button onClick={handleLogout} className="w-full mt-2 text-[11px] text-slate-300 underline font-bold text-center">연동 해제</button>}
+                                    {isLoggedIn && <button onClick={handleLogout} className="w-full mt-4 text-[11px] text-slate-300 underline font-bold text-center border-none bg-transparent cursor-pointer">연동 해제</button>}
                                 </section>
                                 
-                                <section>
+                                <section className="mb-6">
                                     <p className="text-[10px] font-black text-pink-400 uppercase tracking-widest mb-3">구글 시트 연동</p>
                                     <input 
                                         type="text" value={spreadsheetId} 
                                         onChange={(e) => {setSpreadsheetId(e.target.value); localStorage.setItem('toonkit_sheet_id', e.target.value);}}
-                                        placeholder="스프레드시트 ID" 
-                                        className="w-full p-4 bg-slate-50 rounded-2xl text-sm mb-3 outline-none"
+                                        placeholder="스프레드시트 ID를 입력하세요" 
+                                        className="w-full p-4 bg-slate-50 rounded-2xl text-sm mb-3 outline-none border border-slate-100 focus:border-pink-200 transition-all"
                                     />
                                 </section>
-                                <button onClick={() => setShowSettings(false)} className="w-full py-4 bg-pink-500 text-white rounded-2xl font-black shadow-lg">설정 닫기</button>
+                                <button onClick={() => setShowSettings(false)} className="w-full py-4 bg-pink-500 text-white rounded-2xl font-black shadow-lg border-none cursor-pointer active:scale-95 transition-transform">설정 닫기</button>
                             </div>
                         )}
 
@@ -245,8 +265,8 @@
                                         <textarea value={p} onChange={(e) => {const next = [...currentToon.pages]; next[i] = e.target.value; setCurrentToon({...currentToon, pages:next});}} className="w-full min-h-[80px] outline-none text-slate-700 resize-none" placeholder="내용을 입력하세요..." />
                                     </div>
                                 ))}
-                                <div className="fixed bottom-8 left-6 right-6">
-                                    <button onClick={saveToon} className="w-full bg-pink-600 text-white py-5 rounded-[2rem] font-black text-lg shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-all">
+                                <div className="fixed bottom-8 left-6 right-6 z-40">
+                                    <button onClick={saveToon} className="w-full bg-pink-600 text-white py-5 rounded-[2rem] font-black text-lg shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-all border-none">
                                         {isSyncing ? <div className="spinner" style={{borderTopColor:'#fff', width:20, height:20}}></div> : <i data-lucide="cloud-upload"></i>}
                                         {isSyncing ? "동기화 중..." : "저장 및 시트 전송"}
                                     </button>
@@ -254,12 +274,12 @@
                             </div>
                         ) : (
                             <div className="grid gap-4">
-                                {toons.length === 0 ? <div className="text-center py-20 opacity-30 italic text-slate-400">콘티가 없습니다.</div> :
+                                {toons.length === 0 ? <div className="text-center py-20 opacity-30 italic text-slate-400">저장된 콘티가 없습니다.</div> :
                                     toons.map(t => (
-                                        <div key={t.id} onClick={() => {setCurrentToon(t); setIsEditing(true);}} className="bg-white p-6 rounded-[2rem] border-2 border-white shadow-sm active:scale-95 transition-all">
+                                        <div key={t.id} onClick={() => {setCurrentToon(t); setIsEditing(true);}} className="bg-white p-6 rounded-[2rem] border-2 border-white shadow-sm active:scale-95 transition-all cursor-pointer">
                                             <div className="flex justify-between items-center mb-4">
                                                 <h2 className="font-black text-slate-800 truncate pr-4">{t.title}</h2>
-                                                <button onClick={(e) => {e.stopPropagation(); if(confirm("삭제할까요?")){const n = toons.filter(x=>x.id!==t.id); setToons(n); syncToSheets(n);}}} className="text-slate-200 hover:text-red-400"><i data-lucide="trash-2"></i></button>
+                                                <button onClick={(e) => {e.stopPropagation(); if(confirm("이 콘티를 삭제하시겠습니까?")){const n = toons.filter(x=>x.id!==t.id); setToons(n); syncToSheets(n);}}} className="text-slate-200 hover:text-red-400 border-none bg-transparent cursor-pointer"><i data-lucide="trash-2"></i></button>
                                             </div>
                                             <div className="flex gap-1">
                                                 {t.pages.map((p, idx) => <div key={idx} className={`h-1 flex-1 rounded-full ${p.trim() ? 'bg-pink-500 shadow-sm shadow-pink-200' : 'bg-pink-50'}`} />)}
