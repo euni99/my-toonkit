@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>ToonKit - Fixed Sync</title>
+    <title>ToonKit - Perfect Sync</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -20,17 +20,13 @@
             overflow: hidden; background-color: #FFF5F7; 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
             -webkit-user-select: none;
+            touch-action: manipulation;
         }
         #root { height: 100%; width: 100%; }
         
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .spinner { 
-            width: 20px; height: 20px; 
-            border: 2px solid rgba(219, 39, 119, 0.2); border-top-color: #db2777; 
-            border-radius: 50%; animation: spin 0.8s linear infinite; 
-        }
         .pt-safe { padding-top: max(1.25rem, var(--safe-top)); }
         .pb-safe { padding-bottom: max(1.5rem, var(--safe-bottom)); }
+        
         .scroll-container { 
             height: 100%; overflow-y: auto; 
             -webkit-overflow-scrolling: touch; 
@@ -38,33 +34,30 @@
         }
         .scroll-container::-webkit-scrollbar { display: none; }
         
-        .pin-dot { width: 14px; height: 14px; border-radius: 50%; transition: all 0.25s; }
-        .pin-dot.active { background-color: #db2777; transform: scale(1.2); }
-        .pin-dot.inactive { background-color: #fce7f3; border: 1.5px solid #fbcfe8; }
-        
-        /* 완료 상태 스타일 */
-        .toon-card-completed {
-            background-color: #F1F5F9 !important;
-            border-color: #E2E8F0 !important;
-            opacity: 0.75;
+        /* Checkbox Larger Touch Target */
+        .checkbox-trigger {
+            width: 44px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 10;
         }
-        .toon-title-completed {
-            text-decoration: line-through;
-            color: #94A3B8 !important;
+
+        .spinner { 
+            width: 18px; height: 18px; 
+            border: 2px solid rgba(255, 255, 255, 0.3); border-top-color: white; 
+            border-radius: 50%; animation: spin 0.8s linear infinite; 
         }
-        
-        /* 체크박스 개선 */
-        .check-box-hit {
-            padding: 8px;
-            margin: -8px;
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback, useRef } = React;
+        const { useState, useEffect, useRef } = React;
 
         const CLIENT_ID = '1088995464661-ft9gdmqcc90in7k5cdcussocote4mi92.apps.googleusercontent.com';
         const API_KEY = 'AIzaSyBxvFtk2jiBisjoubvv2olJEgyoyNQ_k0w';
@@ -73,279 +66,278 @@
 
         const App = () => {
             const [toons, setToons] = useState(() => {
-                const saved = localStorage.getItem('toonkit_v3_data');
-                return saved ? JSON.parse(saved).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)) : [];
+                const saved = localStorage.getItem('toonkit_data_v4');
+                return saved ? JSON.parse(saved) : [];
             });
             
             const [isEditing, setIsEditing] = useState(false);
-            const [currentToon, setCurrentToon] = useState({ id: null, title: '', pages: Array(10).fill(''), completed: false });
+            const [currentToon, setCurrentToon] = useState(null);
             const [isSyncing, setIsSyncing] = useState(false);
             const [isLoggedIn, setIsLoggedIn] = useState(false);
             const [spreadsheetId, setSpreadsheetId] = useState(localStorage.getItem('toonkit_sheet_id') || '');
             const [showSettings, setShowSettings] = useState(false);
-            const [errorMsg, setErrorMsg] = useState('');
-            
-            const [savedPin, setSavedPin] = useState(localStorage.getItem('toonkit_pin') || '');
-            const [isUnlocked, setIsUnlocked] = useState(false);
-            const [pinInput, setPinInput] = useState('');
-            const [isSettingPin, setIsSettingPin] = useState(false);
+            const [toast, setToast] = useState('');
 
             const tokenClient = useRef(null);
 
-            const initializeGoogleApi = async () => {
-                try {
-                    if (!window.gapi) return;
-                    await new Promise(resolve => window.gapi.load('client', resolve));
-                    await window.gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
-                    const savedToken = localStorage.getItem('google_auth_token');
-                    if (savedToken) {
-                        window.gapi.client.setToken(JSON.parse(savedToken));
-                        setIsLoggedIn(true);
-                    }
-                } catch (e) { console.error(e); }
+            // Toast Message
+            const showToast = (msg) => {
+                setToast(msg);
+                setTimeout(() => setToast(''), 3000);
             };
 
+            // Initialize GAPI
             useEffect(() => {
-                const initGis = () => {
-                    if (!window.google) return;
-                    tokenClient.current = window.google.accounts.oauth2.initTokenClient({
-                        client_id: CLIENT_ID, 
-                        scope: SCOPES,
-                        callback: async (resp) => {
-                            if (resp.error) return;
-                            localStorage.setItem('google_auth_token', JSON.stringify(resp));
-                            setIsLoggedIn(true);
-                            await loadFromSheets(true);
-                        },
-                    });
+                const start = async () => {
+                    await new Promise(resolve => gapi.load('client', resolve));
+                    await gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
+                    const token = localStorage.getItem('google_auth_token');
+                    if (token) {
+                        gapi.client.setToken(JSON.parse(token));
+                        setIsLoggedIn(true);
+                    }
                 };
-                initializeGoogleApi();
-                setTimeout(initGis, 1000);
+                start();
+
+                tokenClient.current = google.accounts.oauth2.initTokenClient({
+                    client_id: CLIENT_ID,
+                    scope: SCOPES,
+                    callback: (resp) => {
+                        if (resp.error) return;
+                        localStorage.setItem('google_auth_token', JSON.stringify(resp));
+                        setIsLoggedIn(true);
+                        showToast("로그인 성공");
+                    },
+                });
             }, []);
 
             useEffect(() => {
-                localStorage.setItem('toonkit_v3_data', JSON.stringify(toons));
+                localStorage.setItem('toonkit_data_v4', JSON.stringify(toons));
                 if (window.lucide) window.lucide.createIcons();
-            }, [toons, isEditing, showSettings, isUnlocked]);
+            }, [toons, isEditing, showSettings]);
 
-            const loadFromSheets = async (silent = false) => {
+            // Load from Sheets
+            const loadData = async () => {
                 if (!spreadsheetId || !isLoggedIn) return;
                 setIsSyncing(true);
                 try {
-                    const ss = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
-                    const sheetName = ss.result.sheets[0].properties.title;
-                    const response = await window.gapi.client.sheets.spreadsheets.values.get({
-                        spreadsheetId, range: `'${sheetName}'!A2:N200`,
+                    const response = await gapi.client.sheets.spreadsheets.values.get({
+                        spreadsheetId,
+                        range: 'A2:N100',
                     });
                     const rows = response.result.values;
                     if (rows) {
-                        const mapped = rows.filter(r => r[12]).map(r => ({
+                        const fetched = rows.filter(r => r[12]).map(r => ({
                             title: r[0] || "",
-                            pages: r.slice(1, 11).map(p => p || ''),
-                            completed: r[11] === "완료",
+                            pages: r.slice(1, 11).map(p => p || ""),
+                            completed: r[11] === "TRUE",
                             id: r[12],
-                            updatedAt: r[13] ? parseInt(r[13]) : Date.now()
+                            updatedAt: parseInt(r[13]) || Date.now()
                         }));
-                        setToons(mapped.sort((a, b) => b.updatedAt - a.updatedAt));
-                        if (!silent) showToast("동기화 완료");
+                        setToons(fetched.sort((a, b) => b.updatedAt - a.updatedAt));
+                        showToast("데이터 동기화 완료");
                     }
-                } catch (e) { showToast("로드 실패"); }
-                finally { setIsSyncing(false); }
+                } catch (e) {
+                    showToast("로드 중 오류 발생");
+                } finally {
+                    setIsSyncing(false);
+                }
             };
 
-            const syncToSheets = async (updatedToons) => {
+            // Full Sync to Sheets (Crucial for Deletion)
+            const syncAllToSheets = async (currentList) => {
                 if (!spreadsheetId || !isLoggedIn) return;
                 setIsSyncing(true);
                 try {
-                    const ss = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
+                    // 1. Get current sheet info
+                    const ss = await gapi.client.sheets.spreadsheets.get({ spreadsheetId });
                     const sheetId = ss.result.sheets[0].properties.sheetId;
-                    const sheetName = ss.result.sheets[0].properties.title;
-                    
-                    // 1. 전체 비우기 (더 확실한 동기화를 위해)
-                    await window.gapi.client.sheets.spreadsheets.values.clear({
-                        spreadsheetId, range: `'${sheetName}'!A2:N200`
+
+                    // 2. Clear all previous data from A2 downwards
+                    await gapi.client.sheets.spreadsheets.values.clear({
+                        spreadsheetId,
+                        range: 'A2:N100'
                     });
 
-                    // 2. 새로운 데이터 업로드
-                    if (updatedToons.length > 0) {
-                        const rows = updatedToons.map(t => [
-                            t.title, ...t.pages, t.completed ? "완료" : "진행중", t.id, t.updatedAt
+                    // 3. If there is data to write
+                    if (currentList.length > 0) {
+                        const values = currentList.map(t => [
+                            t.title, ...t.pages, t.completed ? "TRUE" : "FALSE", t.id, t.updatedAt
                         ]);
-                        await window.gapi.client.sheets.spreadsheets.values.update({
-                            spreadsheetId, range: `'${sheetName}'!A2`,
+                        await gapi.client.sheets.spreadsheets.values.update({
+                            spreadsheetId,
+                            range: 'A2',
                             valueInputOption: 'USER_ENTERED',
-                            resource: { values: rows }
-                        });
-
-                        // 3. 서식 적용 (중간줄)
-                        const formatRequests = updatedToons.map((t, i) => ({
-                            repeatCell: {
-                                range: { sheetId, startRowIndex: i + 1, endRowIndex: i + 2, startColumnIndex: 0, endColumnIndex: 12 },
-                                cell: { userEnteredFormat: { textFormat: { strikethrough: t.completed } } },
-                                fields: "userEnteredFormat.textFormat.strikethrough"
-                            }
-                        }));
-                        await window.gapi.client.sheets.spreadsheets.batchUpdate({
-                            spreadsheetId, resource: { requests: formatRequests }
+                            resource: { values }
                         });
                     }
-                    showToast("시트 업데이트 완료");
-                } catch (e) { showToast("동기화 오류"); }
-                finally { setIsSyncing(false); }
+                } catch (e) {
+                    console.error(e);
+                    showToast("시트 동기화 실패");
+                } finally {
+                    setIsSyncing(false);
+                }
             };
 
-            const saveToon = async () => {
+            const handleSave = async () => {
                 if (!currentToon.title.trim()) return;
                 const now = Date.now();
-                const newToon = currentToon.id 
-                    ? { ...currentToon, updatedAt: now } 
-                    : { ...currentToon, id: now.toString(), updatedAt: now };
-                
-                const newList = currentToon.id 
-                    ? toons.map(t => t.id === currentToon.id ? newToon : t) 
+                const newToon = { ...currentToon, updatedAt: now };
+                if (!newToon.id) newToon.id = now.toString();
+
+                const newList = toons.find(t => t.id === newToon.id)
+                    ? toons.map(t => t.id === newToon.id ? newToon : t)
                     : [newToon, ...toons];
                 
                 const sorted = newList.sort((a, b) => b.updatedAt - a.updatedAt);
                 setToons(sorted);
                 setIsEditing(false);
-                await syncToSheets(sorted);
+                await syncAllToSheets(sorted);
             };
 
-            const deleteToon = async (id) => {
-                if (!confirm("정말 삭제하시겠습니까? 시트의 데이터도 삭제됩니다.")) return;
+            const handleDelete = async (e, id) => {
+                e.stopPropagation();
+                if (!confirm("이 콘티를 영구 삭제하시겠습니까? 구글 시트에서도 삭제됩니다.")) return;
+                
                 const newList = toons.filter(t => t.id !== id);
                 setToons(newList);
-                
-                // 시트에서 행 삭제 처리를 위해 전체 데이터를 다시 덮어쓰기함
-                await syncToSheets(newList);
+                await syncAllToSheets(newList);
+                showToast("삭제되었습니다.");
             };
 
-            const toggleComplete = async (e, id) => {
-                e.stopPropagation(); // 카드 클릭 방지
-                const newList = toons.map(t => 
-                    t.id === id ? { ...t, completed: !t.completed, updatedAt: Date.now() } : t
-                ).sort((a, b) => b.updatedAt - a.updatedAt);
+            const toggleComplete = async (e, toon) => {
+                e.stopPropagation();
+                const updated = { ...toon, completed: !toon.completed, updatedAt: Date.now() };
+                const newList = toons.map(t => t.id === toon.id ? updated : t).sort((a, b) => b.updatedAt - a.updatedAt);
                 setToons(newList);
-                await syncToSheets(newList);
+                await syncAllToSheets(newList);
             };
-
-            const showToast = (msg) => {
-                setErrorMsg(msg);
-                setTimeout(() => setErrorMsg(''), 2000);
-            };
-
-            const handlePinPress = (num) => {
-                if (pinInput.length >= 4) return;
-                const next = pinInput + num;
-                setPinInput(next);
-                if (next.length === 4) {
-                    if (isSettingPin) {
-                        localStorage.setItem('toonkit_pin', next);
-                        setSavedPin(next);
-                        setIsSettingPin(false);
-                        setIsUnlocked(true);
-                        setPinInput('');
-                    } else if (next === savedPin) {
-                        setIsUnlocked(true);
-                        setPinInput('');
-                        loadFromSheets(true);
-                    } else {
-                        showToast("PIN이 틀렸습니다.");
-                        setPinInput('');
-                    }
-                }
-            };
-
-            // --- 렌더링 파트 ---
-            if ((savedPin && !isUnlocked) || isSettingPin) {
-                return (
-                    <div className="h-full w-full flex flex-col items-center justify-center bg-[#FFF5F7] fixed inset-0 z-[100]">
-                        <div className="text-center mb-10">
-                            <div className="w-20 h-20 bg-pink-500 rounded-[2.5rem] flex items-center justify-center text-white mx-auto mb-6 shadow-xl">
-                                <i data-lucide={isSettingPin ? "shield" : "lock"} className="w-8 h-8"></i>
-                            </div>
-                            <h2 className="text-2xl font-black text-slate-800">{isSettingPin ? "보안 설정" : "잠금 해제"}</h2>
-                        </div>
-                        <div className="flex gap-5 mb-14">
-                            {[0,1,2,3].map(i => <div key={i} className={`pin-dot ${pinInput.length > i ? 'active' : 'inactive'}`}></div>)}
-                        </div>
-                        <div className="grid grid-cols-3 gap-6 w-64">
-                            {[1,2,3,4,5,6,7,8,9].map(n => <button key={n} onClick={() => handlePinPress(n.toString())} className="h-16 w-16 rounded-2xl bg-white text-2xl font-bold shadow-sm active:bg-pink-100 flex items-center justify-center text-slate-700">{n}</button>)}
-                            <div className="h-16 w-16"></div>
-                            <button onClick={() => handlePinPress('0')} className="h-16 w-16 rounded-2xl bg-white text-2xl font-bold shadow-sm flex items-center justify-center text-slate-700">0</button>
-                            <button onClick={() => setPinInput('')} className="h-16 w-16 flex items-center justify-center text-slate-300"><i data-lucide="delete"></i></button>
-                        </div>
-                    </div>
-                );
-            }
 
             return (
                 <div className="h-full w-full flex flex-col bg-[#FFF5F7]">
                     <header className="px-6 pt-safe pb-4 flex justify-between items-center bg-white border-b border-pink-100 shadow-sm shrink-0">
                         <div className="flex items-center gap-2">
-                            {isEditing && <button onClick={() => setIsEditing(false)} className="text-pink-500 p-2"><i data-lucide="arrow-left"></i></button>}
+                            {isEditing && (
+                                <button onClick={() => setIsEditing(false)} className="p-2 text-pink-500">
+                                    <i data-lucide="chevron-left" className="w-7 h-7"></i>
+                                </button>
+                            )}
                             <h1 className="text-2xl font-black text-pink-600 tracking-tighter">ToonKit</h1>
                         </div>
                         <div className="flex gap-2">
-                            <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-xl ${isLoggedIn ? 'text-pink-500 bg-pink-50' : 'text-slate-300'}`}><i data-lucide="settings"></i></button>
-                            {!isEditing && <button onClick={() => {setCurrentToon({id:null, title:'', pages:Array(10).fill(''), completed:false}); setIsEditing(true);}} className="bg-pink-500 text-white px-5 py-2 rounded-xl font-black text-sm shadow-md active:scale-95">새 콘티</button>}
+                            <button onClick={() => setShowSettings(!showSettings)} className={`p-2 rounded-xl ${isLoggedIn ? 'text-pink-500 bg-pink-50' : 'text-slate-300'}`}>
+                                <i data-lucide="settings"></i>
+                            </button>
+                            {!isEditing && (
+                                <button 
+                                    onClick={() => {
+                                        setCurrentToon({ title: '', pages: Array(10).fill(''), completed: false });
+                                        setIsEditing(true);
+                                    }} 
+                                    className="bg-pink-500 text-white px-5 py-2 rounded-xl font-black text-sm shadow-md active:scale-95"
+                                >
+                                    새 콘티
+                                </button>
+                            )}
                         </div>
                     </header>
 
-                    <main className="flex-1 scroll-container px-6 py-6">
+                    <main className="flex-1 scroll-container px-6 py-4">
                         {showSettings && (
-                            <div className="mb-8 p-6 bg-white rounded-[2rem] shadow-xl border border-pink-50 animate-in slide-in-from-top-2">
-                                <button onClick={() => loadFromSheets()} className="w-full py-4 bg-blue-50 text-blue-600 rounded-2xl font-bold mb-3 flex items-center justify-center gap-2">
-                                    <i data-lucide="refresh-cw" className={isSyncing ? "animate-spin" : ""}></i> 시트 동기화
-                                </button>
-                                <button onClick={() => tokenClient.current.requestAccessToken()} className={`w-full py-4 rounded-2xl font-bold mb-3 flex items-center justify-center gap-2 ${isLoggedIn ? 'bg-green-50 text-green-600' : 'bg-pink-50 text-pink-600'}`}>
-                                    <i data-lucide="log-in"></i> {isLoggedIn ? "구글 연동 완료" : "구글 로그인"}
-                                </button>
-                                <input type="text" value={spreadsheetId} onChange={(e) => {setSpreadsheetId(e.target.value); localStorage.setItem('toonkit_sheet_id', e.target.value);}} placeholder="Spreadsheet ID 입력" className="w-full p-4 bg-slate-50 rounded-2xl text-sm outline-none border-2 border-transparent focus:border-pink-200" />
-                                <button onClick={() => setShowSettings(false)} className="w-full mt-4 py-4 bg-pink-500 text-white rounded-2xl font-black">닫기</button>
+                            <div className="mb-6 p-6 bg-white rounded-3xl shadow-xl border border-pink-50 animate-in slide-in-from-top-2">
+                                <h3 className="font-bold text-slate-800 mb-4">설정 및 동기화</h3>
+                                <div className="space-y-3">
+                                    <button onClick={() => tokenClient.current.requestAccessToken()} className="w-full py-4 bg-slate-100 rounded-2xl font-bold flex items-center justify-center gap-2 text-slate-700">
+                                        <i data-lucide="user"></i> {isLoggedIn ? "구글 계정 연결됨" : "구글 로그인"}
+                                    </button>
+                                    <input 
+                                        type="text" 
+                                        value={spreadsheetId} 
+                                        onChange={(e) => {setSpreadsheetId(e.target.value); localStorage.setItem('toonkit_sheet_id', e.target.value);}} 
+                                        placeholder="구글 시트 ID 입력" 
+                                        className="w-full p-4 bg-slate-50 rounded-2xl text-sm border-2 border-transparent focus:border-pink-200 outline-none"
+                                    />
+                                    <button onClick={loadData} className="w-full py-4 bg-pink-50 text-pink-600 rounded-2xl font-bold flex items-center justify-center gap-2">
+                                        <i data-lucide="download" className={isSyncing ? "animate-bounce" : ""}></i> 시트에서 불러오기
+                                    </button>
+                                </div>
                             </div>
                         )}
 
                         {isEditing ? (
-                            <div className="space-y-4 pb-40">
-                                <div className="flex items-center gap-4 bg-white p-5 rounded-2xl border border-pink-50 shadow-sm">
-                                    <button onClick={() => setCurrentToon({...currentToon, completed: !currentToon.completed})} className={`w-9 h-9 rounded-lg border-2 flex items-center justify-center transition-all ${currentToon.completed ? 'bg-green-500 border-green-500 text-white shadow-lg shadow-green-100' : 'border-slate-200 text-transparent'}`}>
-                                        <i data-lucide="check" className="w-6 h-6 stroke-[4]"></i>
-                                    </button>
-                                    <input type="text" value={currentToon.title} onChange={(e) => setCurrentToon({...currentToon, title:e.target.value})} placeholder="에피소드 제목" className={`flex-1 text-xl font-black outline-none ${currentToon.completed ? 'line-through text-slate-400' : 'text-slate-800'}`} />
+                            <div className="space-y-4 pb-32">
+                                <div className="bg-white p-4 rounded-2xl shadow-sm border border-pink-50 flex items-center gap-3">
+                                    <div className="checkbox-trigger" onClick={() => setCurrentToon({...currentToon, completed: !currentToon.completed})}>
+                                        <div className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center transition-colors ${currentToon.completed ? 'bg-green-500 border-green-500' : 'border-slate-200 bg-white'}`}>
+                                            {currentToon.completed && <i data-lucide="check" className="text-white w-5 h-5 stroke-[4]"></i>}
+                                        </div>
+                                    </div>
+                                    <input 
+                                        className="flex-1 text-xl font-bold outline-none text-slate-800 placeholder:text-slate-300"
+                                        placeholder="에피소드 제목"
+                                        value={currentToon.title}
+                                        onChange={(e) => setCurrentToon({...currentToon, title: e.target.value})}
+                                    />
                                 </div>
-                                {currentToon.pages.map((p, i) => (
-                                    <div key={i} className={`p-5 rounded-[2rem] border border-pink-50 shadow-sm transition-all ${currentToon.completed ? 'bg-slate-50 opacity-60' : 'bg-white'}`}>
-                                        <p className="text-[10px] font-black text-pink-300 mb-2 tracking-widest uppercase">{i === 0 ? "COVER" : `PAGE ${i}`}</p>
-                                        <textarea value={p} onChange={(e) => {const next = [...currentToon.pages]; next[i] = e.target.value; setCurrentToon({...currentToon, pages:next});}} className="w-full min-h-[140px] outline-none text-slate-700 resize-none leading-relaxed text-base bg-transparent" placeholder="대사 및 장면 묘사..." />
+                                {currentToon.pages.map((text, idx) => (
+                                    <div key={idx} className="bg-white p-5 rounded-3xl border border-pink-50 shadow-sm">
+                                        <span className="text-[10px] font-black text-pink-300 tracking-widest uppercase block mb-2">{idx === 0 ? '표지' : `${idx}페이지`}</span>
+                                        <textarea 
+                                            className="w-full min-h-[120px] outline-none text-slate-700 resize-none leading-relaxed text-base"
+                                            placeholder="장면 묘사 및 대사를 입력하세요..."
+                                            value={text}
+                                            onChange={(e) => {
+                                                const next = [...currentToon.pages];
+                                                next[idx] = e.target.value;
+                                                setCurrentToon({...currentToon, pages: next});
+                                            }}
+                                        />
                                     </div>
                                 ))}
-                                <div className="fixed bottom-10 left-6 right-6">
-                                    <button onClick={saveToon} disabled={isSyncing} className="w-full py-5 rounded-[2.2rem] font-black text-lg bg-pink-600 text-white shadow-2xl flex items-center justify-center gap-3 active:scale-95 disabled:bg-slate-300 transition-all">
-                                        {isSyncing ? <div className="spinner" style={{borderTopColor:'#fff'}}></div> : <i data-lucide="upload-cloud"></i>}
-                                        {isSyncing ? "동기화 중..." : "저장하기"}
+                                <div className="fixed bottom-10 left-6 right-6 flex gap-3">
+                                    <button onClick={handleSave} className="flex-1 py-5 bg-pink-600 text-white rounded-[2rem] font-black text-lg shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-transform">
+                                        {isSyncing ? <div className="spinner"></div> : <i data-lucide="save"></i>}
+                                        {isSyncing ? "동기화 중..." : "저장하고 시트 업데이트"}
                                     </button>
                                 </div>
                             </div>
                         ) : (
-                            <div className="grid gap-5 pb-24">
-                                {toons.map(t => (
-                                    <div key={t.id} onClick={() => {setCurrentToon(t); setIsEditing(true);}} className={`p-6 rounded-[2.5rem] border-2 shadow-sm transition-all relative ${t.completed ? 'toon-card-completed' : 'bg-white border-white'}`}>
-                                        <div className="flex justify-between items-start mb-5">
-                                            <div className="flex items-center gap-4 pr-10">
-                                                <div className="check-box-hit" onClick={(e) => toggleComplete(e, t.id)}>
-                                                    <div className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center transition-all ${t.completed ? 'bg-green-500 border-green-500 text-white shadow-lg shadow-green-100' : 'border-slate-200 text-transparent bg-white'}`}>
-                                                        <i data-lucide="check" className="w-5 h-5 stroke-[4]"></i>
+                            <div className="grid gap-4 pb-20">
+                                {toons.length === 0 && (
+                                    <div className="py-20 text-center">
+                                        <i data-lucide="layout" className="w-16 h-16 text-pink-100 mx-auto mb-4"></i>
+                                        <p className="text-slate-400 font-medium">작성된 콘티가 없습니다.<br/>새 콘티를 눌러 시작하세요!</p>
+                                    </div>
+                                )}
+                                {toons.map(toon => (
+                                    <div 
+                                        key={toon.id} 
+                                        onClick={() => {setCurrentToon(toon); setIsEditing(true);}}
+                                        className={`group relative p-6 rounded-[2.5rem] border-2 transition-all active:scale-[0.98] ${toon.completed ? 'bg-slate-50 border-slate-100 opacity-80' : 'bg-white border-white shadow-sm'}`}
+                                    >
+                                        <div className="flex items-start justify-between mb-4 pr-8">
+                                            <div className="flex items-center gap-3">
+                                                {/* Enhanced Checkbox Area */}
+                                                <div className="checkbox-trigger" onClick={(e) => toggleComplete(e, toon)}>
+                                                    <div className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center transition-colors ${toon.completed ? 'bg-green-500 border-green-500' : 'border-slate-200 bg-white'}`}>
+                                                        {toon.completed && <i data-lucide="check" className="text-white w-5 h-5 stroke-[4]"></i>}
                                                     </div>
                                                 </div>
-                                                <h2 className={`font-black text-lg truncate tracking-tight ${t.completed ? 'toon-title-completed' : 'text-slate-800'}`}>{t.title}</h2>
+                                                <h2 className={`text-lg font-black truncate max-w-[180px] ${toon.completed ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+                                                    {toon.title}
+                                                </h2>
                                             </div>
-                                            <button onClick={(e) => { e.stopPropagation(); deleteToon(t.id); }} className="absolute top-6 right-6 p-2 text-slate-200 hover:text-pink-500">
+                                            <button 
+                                                onClick={(e) => handleDelete(e, toon.id)}
+                                                className="absolute top-6 right-6 p-2 text-slate-300 hover:text-red-500"
+                                            >
                                                 <i data-lucide="trash-2" className="w-5 h-5"></i>
                                             </button>
                                         </div>
-                                        <div className="flex gap-1.5">
-                                            {t.pages.map((p, idx) => <div key={idx} className={`h-1.5 flex-1 rounded-full ${p && p.trim() ? (t.completed ? 'bg-slate-300' : 'bg-pink-500') : 'bg-pink-50/50'}`} />)}
+                                        <div className="flex gap-1.5 h-1.5 w-full">
+                                            {toon.pages.map((p, i) => (
+                                                <div key={i} className={`flex-1 rounded-full ${p.trim() ? (toon.completed ? 'bg-slate-300' : 'bg-pink-500') : 'bg-pink-50'}`} />
+                                            ))}
                                         </div>
                                     </div>
                                 ))}
@@ -353,7 +345,11 @@
                         )}
                     </main>
 
-                    {errorMsg && <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-3 rounded-full text-xs font-bold z-[60] shadow-xl">{errorMsg}</div>}
+                    {toast && (
+                        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-800/95 text-white px-6 py-3 rounded-2xl text-sm font-bold shadow-2xl z-50 animate-in fade-in slide-in-from-bottom-4">
+                            {toast}
+                        </div>
+                    )}
                 </div>
             );
         };
