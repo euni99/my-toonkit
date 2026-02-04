@@ -112,7 +112,7 @@
                         setIsSettingPin(false);
                         setIsUnlocked(true);
                         setPinInput('');
-                        setShowSettings(false); // 설정 완료 후 닫기
+                        setShowSettings(false);
                     } else if (newPin === savedPin) {
                         setIsUnlocked(true);
                         setPinInput('');
@@ -137,34 +137,65 @@
             };
 
             const syncToSheets = async (targetData) => {
-                if (!spreadsheetId || !isLoggedIn) return;
+                if (!spreadsheetId || !isLoggedIn) {
+                    console.log("시트 ID 누락 또는 미로그인 상태입니다.");
+                    return;
+                }
+                
                 setIsSyncing(true);
                 try {
+                    // 1. 스프레드시트 정보 가져오기
                     const ss = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
                     const targetSheetName = ss.result.sheets[0].properties.title;
-                    const rows = targetData.map(t => [t.title, ...t.pages, t.completed ? "완료" : "진행중", t.id]);
-                    const header = ["제목", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "상태", "고유ID"];
+                    
+                    // 2. 데이터 행 구성
+                    const rows = targetData.map(t => [
+                        t.title, 
+                        ...t.pages, 
+                        t.completed ? "완료" : "진행중", 
+                        t.id,
+                        new Date().toLocaleString()
+                    ]);
+                    
+                    // 3. 헤더 구성
+                    const header = ["제목", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "상태", "고유ID", "마지막동기화"];
 
+                    // 4. 시트 업데이트 (A1부터 전체 갱신)
                     await window.gapi.client.sheets.spreadsheets.values.update({
-                        spreadsheetId, range: `'${targetSheetName}'!A1`,
+                        spreadsheetId, 
+                        range: `'${targetSheetName}'!A1`,
                         valueInputOption: 'USER_ENTERED',
                         resource: { values: [header, ...rows] }
                     });
+                    console.log("시트 동기화 완료");
                 } catch (err) {
+                    console.error("동기화 에러:", err);
                     if (err.status === 401) handleLogout();
-                } finally { setIsSyncing(false); }
+                    setErrorMsg("시트 전송 실패. ID를 확인하세요.");
+                } finally { 
+                    setIsSyncing(false); 
+                }
             };
 
-            const saveToon = () => {
+            const saveToon = async () => {
                 if (!currentToon.title.trim()) return;
+                
                 const newToon = currentToon.id ? currentToon : { ...currentToon, id: Date.now().toString() };
                 const newList = currentToon.id ? toons.map(t => t.id === currentToon.id ? newToon : t) : [newToon, ...toons];
+                
+                // 1. 로컬 상태 업데이트
                 setToons(newList);
+                
+                // 2. 시트 동기화 시도 (await를 통해 완료 대기)
+                if (isLoggedIn && spreadsheetId) {
+                    await syncToSheets(newList);
+                }
+                
+                // 3. 편집 모드 종료
                 setIsEditing(false);
-                syncToSheets(newList);
             };
 
-            // --- 잠금 화면 렌더링 (설정 시 또는 앱 진입 시) ---
+            // --- 잠금 화면 렌더링 ---
             if ((savedPin && !isUnlocked) || isSettingPin) {
                 return (
                     <div className="h-full w-full flex flex-col items-center justify-center bg-[#FFF5F7] px-10 fixed inset-0 z-[100]">
@@ -197,7 +228,7 @@
                         {isSettingPin && (
                             <button onClick={() => setIsSettingPin(false)} className="mt-8 text-slate-400 font-bold underline">취소하기</button>
                         )}
-                        {errorMsg && <p className="mt-6 text-red-500 font-bold animate-bounce">{errorMsg}</p>}
+                        {errorMsg && <p className="mt-6 text-red-500 font-bold animate-bounce text-sm">{errorMsg}</p>}
                     </div>
                 );
             }
@@ -251,8 +282,9 @@
                                         placeholder="스프레드시트 ID를 입력하세요" 
                                         className="w-full p-4 bg-slate-50 rounded-2xl text-sm mb-3 outline-none border border-slate-100 focus:border-pink-200 transition-all"
                                     />
+                                    <p className="text-[10px] text-slate-400 px-2 leading-relaxed italic">주소창의 d/와 /edit 사이의 문자열을 입력하세요.</p>
                                 </section>
-                                <button onClick={() => setShowSettings(false)} className="w-full py-4 bg-pink-500 text-white rounded-2xl font-black shadow-lg border-none cursor-pointer active:scale-95 transition-transform">설정 닫기</button>
+                                <button onClick={() => setShowSettings(false)} className="w-full py-4 bg-pink-500 text-white rounded-2xl font-black shadow-lg border-none cursor-pointer active:scale-95 transition-transform">설정 완료</button>
                             </div>
                         )}
 
@@ -266,7 +298,7 @@
                                     </div>
                                 ))}
                                 <div className="fixed bottom-8 left-6 right-6 z-40">
-                                    <button onClick={saveToon} className="w-full bg-pink-600 text-white py-5 rounded-[2rem] font-black text-lg shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-all border-none">
+                                    <button onClick={saveToon} disabled={isSyncing} className={`w-full py-5 rounded-[2rem] font-black text-lg shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-all border-none ${isSyncing ? 'bg-slate-300 text-slate-500' : 'bg-pink-600 text-white'}`}>
                                         {isSyncing ? <div className="spinner" style={{borderTopColor:'#fff', width:20, height:20}}></div> : <i data-lucide="cloud-upload"></i>}
                                         {isSyncing ? "동기화 중..." : "저장 및 시트 전송"}
                                     </button>
@@ -279,7 +311,7 @@
                                         <div key={t.id} onClick={() => {setCurrentToon(t); setIsEditing(true);}} className="bg-white p-6 rounded-[2rem] border-2 border-white shadow-sm active:scale-95 transition-all cursor-pointer">
                                             <div className="flex justify-between items-center mb-4">
                                                 <h2 className="font-black text-slate-800 truncate pr-4">{t.title}</h2>
-                                                <button onClick={(e) => {e.stopPropagation(); if(confirm("이 콘티를 삭제하시겠습니까?")){const n = toons.filter(x=>x.id!==t.id); setToons(n); syncToSheets(n);}}} className="text-slate-200 hover:text-red-400 border-none bg-transparent cursor-pointer"><i data-lucide="trash-2"></i></button>
+                                                <button onClick={(e) => {e.stopPropagation(); if(confirm("이 콘티를 삭제하시겠습니까?")){const n = toons.filter(x=>x.id!==t.id); setToons(n); if(isLoggedIn) syncToSheets(n);}}} className="text-slate-200 hover:text-red-400 border-none bg-transparent cursor-pointer"><i data-lucide="trash-2"></i></button>
                                             </div>
                                             <div className="flex gap-1">
                                                 {t.pages.map((p, idx) => <div key={idx} className={`h-1 flex-1 rounded-full ${p.trim() ? 'bg-pink-500 shadow-sm shadow-pink-200' : 'bg-pink-50'}`} />)}
@@ -287,6 +319,11 @@
                                         </div>
                                     ))
                                 }
+                            </div>
+                        )}
+                        {errorMsg && !isEditing && !showSettings && (
+                            <div className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-red-500 text-white px-6 py-2 rounded-full text-xs font-bold shadow-lg z-[60]">
+                                {errorMsg}
                             </div>
                         )}
                     </main>
