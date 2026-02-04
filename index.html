@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>ToonKit Final</title>
     
-    <!-- 외부 스크립트 로드 -->
+    <!-- External Scripts -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -57,7 +57,7 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef } = React;
 
-        // ⚠️ 사용자 설정 영역 (구글 클라우드 콘솔 정보)
+        // ⚠️ User Settings Area (Google Cloud Console Info)
         const CLIENT_ID = '1088995464661-ft9gdmqcc90in7k5cdcussocote4mi92.apps.googleusercontent.com';
         const API_KEY = 'AIzaSyBxvFtk2jiBisjoubvv2olJEgyoyNQ_k0w';
         const DISCOVERY_DOC = 'https://sheets.googleapis.com/$discovery/rest?version=v4';
@@ -84,7 +84,7 @@
 
             const tokenClient = useRef(null);
 
-            // 구글 클라이언트 초기화 함수 (재사용 가능하게 분리)
+            // Initialize Google API
             const initializeGoogleApi = async () => {
                 try {
                     if (!window.gapi) return;
@@ -128,11 +128,10 @@
                 if (window.lucide) window.lucide.createIcons();
             }, [toons, isEditing, showSettings, isUnlocked, isSettingPin, pinInput]);
 
-            // --- 시트에서 데이터 가져오기 (Pull & Merge) ---
+            // Fetch data from Sheets
             const fetchLatestData = async () => {
                 if (!spreadsheetId || !isLoggedIn) return toons;
 
-                // gapi.client가 로드되지 않은 경우 재시도
                 if (!window.gapi?.client?.sheets) {
                     const success = await initializeGoogleApi();
                     if (!success) return toons;
@@ -151,6 +150,7 @@
                             pages: row.slice(1, 11).map(p => p || ''),
                             completed: row[11] === "완료",
                             id: row[12] || Math.random().toString(),
+                            updatedAt: row[13] ? parseInt(row[13]) : 0 
                         }));
                     }
                 } catch (e) { 
@@ -173,8 +173,11 @@
                 setIsSyncing(true);
                 try {
                     const latest = await fetchLatestData();
-                    if (JSON.stringify(latest) !== JSON.stringify(toons)) {
-                        setToons(latest);
+                    // Sort by updatedAt descending
+                    const sortedLatest = [...latest].sort((a, b) => (b.updatedAt || b.id) - (a.updatedAt || a.id));
+                    
+                    if (JSON.stringify(sortedLatest) !== JSON.stringify(toons)) {
+                        setToons(sortedLatest);
                         if (!silent) {
                             setErrorMsg("최신 데이터를 불러왔습니다.");
                             setTimeout(() => setErrorMsg(''), 2000);
@@ -190,7 +193,7 @@
                 }
             };
 
-            // PIN 입력 및 초기 동기화
+            // Handle PIN input
             const handlePinPress = async (num) => {
                 if (pinInput.length >= 4) return;
                 const newPin = pinInput + num;
@@ -204,13 +207,9 @@
                         setIsUnlocked(true);
                         setPinInput('');
                     } else if (newPin === savedPin) {
-                        // 잠금 해제 성공
                         setIsUnlocked(true);
                         setPinInput('');
-                        
-                        // 잠금 해제 즉시 데이터 동기화 시도
                         if (spreadsheetId) {
-                            // 토큰이 있으면 바로 시도, 없으면 경고만
                             if (isLoggedIn) {
                                 setErrorMsg("최신 데이터 동기화 중...");
                                 await loadFromSheets(true);
@@ -230,7 +229,7 @@
                 }
             };
 
-            // --- 시트로 데이터 내보내기 (Push with Merge) ---
+            // Export to Sheets
             const syncToSheets = async (currentLocalData) => {
                 if (!spreadsheetId || !isLoggedIn) return;
                 if (!window.gapi?.client?.sheets) {
@@ -244,14 +243,16 @@
                     const mergedMap = new Map();
                     remoteData.forEach(t => mergedMap.set(t.id, t));
                     currentLocalData.forEach(t => mergedMap.set(t.id, t));
-                    const finalData = Array.from(mergedMap.values());
+                    
+                    // Final sorting by updatedAt
+                    const finalData = Array.from(mergedMap.values()).sort((a, b) => (b.updatedAt || b.id) - (a.updatedAt || a.id));
 
                     const ss = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
                     const sheetName = ss.result.sheets[0].properties.title;
                     const rows = finalData.map(t => [
-                        t.title, ...t.pages, t.completed ? "완료" : "진행중", t.id, new Date().toLocaleString()
+                        t.title, ...t.pages, t.completed ? "완료" : "진행중", t.id, t.updatedAt || Date.now()
                     ]);
-                    const header = ["제목", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "상태", "ID", "업데이트"];
+                    const header = ["제목", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "상태", "ID", "업데이트타임스탬프"];
                     
                     await window.gapi.client.sheets.spreadsheets.values.update({
                         spreadsheetId, range: `'${sheetName}'!A1`,
@@ -268,10 +269,17 @@
 
             const saveToon = async () => {
                 if (!currentToon.title.trim()) return;
-                const newToon = currentToon.id ? currentToon : { ...currentToon, id: Date.now().toString() };
-                const newList = currentToon.id 
+                const now = Date.now();
+                const newToon = currentToon.id 
+                    ? { ...currentToon, updatedAt: now } 
+                    : { ...currentToon, id: now.toString(), updatedAt: now };
+                
+                let newList = currentToon.id 
                     ? toons.map(t => t.id === currentToon.id ? newToon : t) 
                     : [newToon, ...toons];
+                
+                // Ensure recent is first
+                newList.sort((a, b) => (b.updatedAt || b.id) - (a.updatedAt || a.id));
                 
                 setToons(newList);
                 if (isLoggedIn && spreadsheetId) {
@@ -284,10 +292,11 @@
                 if (tokenClient.current) {
                     tokenClient.current.requestAccessToken({ prompt: 'consent' });
                 } else {
-                    setErrorMsg("구글 인증 클라이언트를 로드하는 중입니다. 잠시 후 다시 시도하세요.");
+                    setErrorMsg("인증 시스템 로딩 중...");
                 }
             };
 
+            // Login / PIN Screen
             if ((savedPin && !isUnlocked) || isSettingPin) {
                 return (
                     <div className="h-full w-full flex flex-col items-center justify-center bg-[#FFF5F7] px-10 fixed inset-0 z-[100]">
@@ -296,7 +305,7 @@
                                 <i data-lucide={isSettingPin ? "shield-check" : "lock"} className="w-8 h-8"></i>
                             </div>
                             <h2 className="text-2xl font-black text-slate-800 tracking-tight">{isSettingPin ? "PIN 설정" : "ToonKit"}</h2>
-                            <p className="text-slate-400 text-sm mt-2">{isSettingPin ? "사용할 암호 4자리를 입력하세요" : "암호를 입력해 시작하세요"}</p>
+                            <p className="text-slate-400 text-sm mt-2">{isSettingPin ? "암호 4자리를 설정하세요" : "암호를 입력하세요"}</p>
                         </div>
                         <div className="flex gap-5 mb-14">
                             {[0,1,2,3].map(i => <div key={i} className={`pin-dot ${pinInput.length > i ? 'active' : 'inactive'}`}></div>)}
@@ -328,24 +337,19 @@
                     <main className="flex-1 scroll-container px-6 py-6">
                         {showSettings && (
                             <div className="mb-8 p-6 bg-white rounded-[2.5rem] shadow-xl border-2 border-pink-50">
-                                <div className="flex items-center justify-between mb-6">
-                                    <h3 className="font-black text-slate-800">설정</h3>
-                                    <div className={`flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-bold ${isLoggedIn ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
-                                        <div className={`w-1.5 h-1.5 rounded-full ${isLoggedIn ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                        {isLoggedIn ? "ONLINE" : "OFFLINE"}
-                                    </div>
-                                </div>
+                                <h3 className="font-black text-slate-800 mb-4">설정</h3>
                                 <button onClick={() => loadFromSheets(false)} className="w-full py-4 bg-blue-50 text-blue-600 rounded-2xl font-bold mb-3 flex items-center justify-center gap-2">
-                                    <i data-lucide="refresh-cw" className={isSyncing ? "animate-spin" : ""}></i> 수동 동기화 (가져오기)
+                                    <i data-lucide="refresh-cw" className={isSyncing ? "animate-spin" : ""}></i> 시트에서 가져오기
                                 </button>
                                 <button onClick={handleLogin} className={`w-full py-4 rounded-2xl font-bold mb-3 flex items-center justify-center gap-2 ${isLoggedIn ? 'bg-green-50 text-green-600' : 'bg-pink-50 text-pink-600'}`}>
                                     <i data-lucide={isLoggedIn ? "check-circle" : "log-in"}></i> {isLoggedIn ? "구글 계정 연결됨" : "구글 로그인"}
                                 </button>
                                 <div className="space-y-2 mb-4">
                                     <label className="text-[10px] font-bold text-slate-400 px-2 uppercase tracking-widest">Spreadsheet ID</label>
-                                    <input type="text" value={spreadsheetId} onChange={(e) => {setSpreadsheetId(e.target.value); localStorage.setItem('toonkit_sheet_id', e.target.value);}} placeholder="구글 시트 주소에서 ID 복사" className="w-full p-4 bg-slate-50 rounded-2xl text-sm outline-none border border-transparent focus:border-pink-200" />
+                                    <input type="text" value={spreadsheetId} onChange={(e) => {setSpreadsheetId(e.target.value); localStorage.setItem('toonkit_sheet_id', e.target.value);}} placeholder="구글 시트 ID" className="w-full p-4 bg-slate-50 rounded-2xl text-sm outline-none border border-transparent focus:border-pink-200" />
                                 </div>
-                                <button onClick={() => setShowSettings(false)} className="w-full py-4 bg-pink-500 text-white rounded-2xl font-black shadow-lg">설정 닫기</button>
+                                <button onClick={() => {if(confirm("PIN을 재설정하시겠습니까?")) setIsSettingPin(true);}} className="w-full py-3 text-slate-400 text-xs font-bold underline mb-4">PIN 번호 재설정</button>
+                                <button onClick={() => setShowSettings(false)} className="w-full py-4 bg-pink-500 text-white rounded-2xl font-black shadow-lg">닫기</button>
                             </div>
                         )}
 
@@ -355,29 +359,29 @@
                                 {currentToon.pages.map((p, i) => (
                                     <div key={i} className="bg-white p-5 rounded-3xl border border-pink-50 shadow-sm">
                                         <p className="text-[10px] font-black text-pink-300 mb-2">{i === 0 ? "COVER" : `PAGE ${i}`}</p>
-                                        <textarea value={p} onChange={(e) => {const next = [...currentToon.pages]; next[i] = e.target.value; setCurrentToon({...currentToon, pages:next});}} className="w-full min-h-[120px] outline-none text-slate-700 resize-none leading-relaxed" placeholder="장면 묘사 및 대사를 입력하세요..." />
+                                        <textarea value={p} onChange={(e) => {const next = [...currentToon.pages]; next[i] = e.target.value; setCurrentToon({...currentToon, pages:next});}} className="w-full min-h-[120px] outline-none text-slate-700 resize-none leading-relaxed" placeholder="장면 및 대사..." />
                                     </div>
                                 ))}
                                 <div className="fixed bottom-10 left-6 right-6 z-50">
                                     <button onClick={saveToon} disabled={isSyncing} className="w-full py-5 rounded-[2rem] font-black text-lg bg-pink-600 text-white shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-all">
                                         {isSyncing ? <div className="spinner" style={{borderTopColor:'#fff'}}></div> : <i data-lucide="cloud-upload"></i>}
-                                        {isSyncing ? "데이터 동기화 중..." : "저장 및 시트 전송"}
+                                        {isSyncing ? "동기화 중..." : "저장 및 업로드"}
                                     </button>
                                 </div>
                             </div>
                         ) : (
                             <div className="grid gap-5 pb-20">
                                 {toons.length === 0 && (
-                                    <div className="py-20 text-center">
-                                        <i data-lucide="layout" className="w-12 h-12 text-pink-100 mx-auto mb-4"></i>
-                                        <p className="text-slate-400 font-medium">데이터를 불러오는 중이거나<br/>작성된 콘티가 없습니다.</p>
+                                    <div className="py-20 text-center text-slate-300">
+                                        <i data-lucide="layout" className="w-12 h-12 mx-auto mb-4 opacity-20"></i>
+                                        <p>콘티가 없습니다.</p>
                                     </div>
                                 )}
                                 {toons.map(t => (
                                     <div key={t.id} onClick={() => {setCurrentToon(t); setIsEditing(true);}} className="bg-white p-6 rounded-[2.5rem] shadow-sm border-2 border-white active:scale-95 transition-all cursor-pointer">
                                         <div className="flex justify-between items-start mb-4">
                                             <h2 className="font-black text-slate-800 text-lg truncate pr-4">{t.title}</h2>
-                                            <button onClick={(e) => { e.stopPropagation(); if(confirm("삭제하시겠습니까? 시트에서도 삭제됩니다.")){ const n = toons.filter(x=>x.id!==t.id); setToons(n); syncToSheets(n); } }} className="text-slate-200 hover:text-red-400 p-1"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
+                                            <button onClick={(e) => { e.stopPropagation(); if(confirm("삭제하시겠습니까?")){ const n = toons.filter(x=>x.id!==t.id); setToons(n); syncToSheets(n); } }} className="text-slate-200 hover:text-red-400"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
                                         </div>
                                         <div className="flex gap-1">
                                             {t.pages.map((p, idx) => <div key={idx} className={`h-1.5 flex-1 rounded-full ${p && p.trim() ? 'bg-pink-500' : 'bg-pink-50'}`} />)}
@@ -387,7 +391,7 @@
                             </div>
                         )}
                     </main>
-                    {errorMsg && <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-2 rounded-full text-[10px] font-bold shadow-lg z-[60] animate-bounce">{errorMsg}</div>}
+                    {errorMsg && <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-2 rounded-full text-[10px] font-bold shadow-lg z-[60]">{errorMsg}</div>}
                 </div>
             );
         };
