@@ -66,7 +66,9 @@
         const App = () => {
             const [toons, setToons] = useState(() => {
                 const saved = localStorage.getItem('toonkit_v3_data');
-                return saved ? JSON.parse(saved) : [];
+                const parsed = saved ? JSON.parse(saved) : [];
+                // 초기 로드 시에도 최신순 정렬 보장
+                return parsed.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
             });
             
             const [isEditing, setIsEditing] = useState(false);
@@ -173,17 +175,12 @@
                 setIsSyncing(true);
                 try {
                     const latest = await fetchLatestData();
-                    // Sort by updatedAt descending
-                    const sortedLatest = [...latest].sort((a, b) => (b.updatedAt || b.id) - (a.updatedAt || a.id));
+                    // 항상 최신순으로 정렬하여 상태 업데이트
+                    const sortedLatest = [...latest].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
                     
-                    if (JSON.stringify(sortedLatest) !== JSON.stringify(toons)) {
-                        setToons(sortedLatest);
-                        if (!silent) {
-                            setErrorMsg("최신 데이터를 불러왔습니다.");
-                            setTimeout(() => setErrorMsg(''), 2000);
-                        }
-                    } else if (!silent) {
-                        setErrorMsg("이미 최신 상태입니다.");
+                    setToons(sortedLatest);
+                    if (!silent) {
+                        setErrorMsg("최신 데이터를 불러왔습니다.");
                         setTimeout(() => setErrorMsg(''), 2000);
                     }
                 } catch (err) {
@@ -244,8 +241,8 @@
                     remoteData.forEach(t => mergedMap.set(t.id, t));
                     currentLocalData.forEach(t => mergedMap.set(t.id, t));
                     
-                    // Final sorting by updatedAt
-                    const finalData = Array.from(mergedMap.values()).sort((a, b) => (b.updatedAt || b.id) - (a.updatedAt || a.id));
+                    // 병합 시에도 updatedAt 기준 최신순 정렬
+                    const finalData = Array.from(mergedMap.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 
                     const ss = await window.gapi.client.sheets.spreadsheets.get({ spreadsheetId });
                     const sheetName = ss.result.sheets[0].properties.title;
@@ -278,8 +275,8 @@
                     ? toons.map(t => t.id === currentToon.id ? newToon : t) 
                     : [newToon, ...toons];
                 
-                // Ensure recent is first
-                newList.sort((a, b) => (b.updatedAt || b.id) - (a.updatedAt || a.id));
+                // 저장 직후에도 리스트를 최신순으로 정렬
+                newList.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
                 
                 setToons(newList);
                 if (isLoggedIn && spreadsheetId) {
